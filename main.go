@@ -93,7 +93,7 @@ func driverStart() error {
 	tools := driver.NewTools(cmdExecutor)
 
 	// 3. Create and Run the Driver
-	drv, err := driver.NewControllerAndNodeDriver(csiNodeID, csiEndpoint, dsmService, tools)
+	drv, err := driver.NewControllerAndNodeDriver(csiNodeID, csiEndpoint, dsmService, tools, chrootDir)
 	if err != nil {
 		log.Errorf("Failed to create driver: %v", err)
 		return err

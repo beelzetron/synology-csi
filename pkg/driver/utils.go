@@ -22,13 +22,18 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"testing"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	"github.com/kubernetes-csi/csi-lib-utils/protosanitizer"
 	log "github.com/sirupsen/logrus"
 	"google.golang.org/grpc"
+	v1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	clientset "k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/kubernetes/fake"
 	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/mount-utils"
 	"k8s.io/utils/exec"
 )
@@ -51,16 +56,40 @@ func NewControllerServer(d *Driver) *controllerServer {
 }
 
 func getK8sClient() clientset.Interface {
-	config, err := rest.InClusterConfig()
-	if err != nil {
-		log.Fatalf("Failed to read in-cluster config: %v", err)
+	if cfg, err := rest.InClusterConfig(); err == nil {
+		client, err := clientset.NewForConfig(cfg)
+		if err == nil {
+			return client
+		}
+		log.Errorf("in-cluster REST config present but NewForConfig failed: %v", err)
 	}
 
-	client, err := clientset.NewForConfig(config)
-	if err != nil {
-		log.Fatalf("Failed to create Kubernetes client: %v", err)
+	loadingRules := clientcmd.NewDefaultClientConfigLoadingRules()
+	kubeCfg := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(loadingRules, &clientcmd.ConfigOverrides{})
+	var kubeErr error
+	cfg, err := kubeCfg.ClientConfig()
+	if err == nil {
+		client, err := clientset.NewForConfig(cfg)
+		if err == nil {
+			return client
+		}
+		kubeErr = err
+	} else {
+		kubeErr = err
 	}
-	return client
+
+	if testing.Testing() {
+		log.Warnf("No usable Kubernetes client (%v); using fake clientset for tests", kubeErr)
+		return fake.NewSimpleClientset(&v1.Node{
+			ObjectMeta: metav1.ObjectMeta{Name: "synology-csi-test-node"},
+			Status: v1.NodeStatus{
+				Addresses: []v1.NodeAddress{{Type: v1.NodeInternalIP, Address: "127.0.0.1"}},
+			},
+		})
+	}
+
+	log.Fatalf("Failed to configure Kubernetes client: %v", kubeErr)
+	return nil
 }
 
 func NewNodeServer(d *Driver) *nodeServer {

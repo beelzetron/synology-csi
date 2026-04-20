@@ -2,7 +2,7 @@
 
 REGISTRY_NAME=synology
 IMAGE_NAME=synology-csi
-IMAGE_VERSION=v1.2.1
+IMAGE_VERSION=v1.3.0
 IMAGE_TAG=$(REGISTRY_NAME)/$(IMAGE_NAME):$(IMAGE_VERSION)
 
 # For now, only build linux/amd64 platform
@@ -44,7 +44,12 @@ bin/synocli: bin FORCE
 .PHONY: test
 test:
 	go clean -testcache
-	go test -v ./test/...
+	go test -count=1 -short -v ./...
+
+.PHONY: test-sanity
+test-sanity:
+	go clean -testcache
+	go test -count=1 -v ./test/...
 
 .PHONY: clean
 clean:

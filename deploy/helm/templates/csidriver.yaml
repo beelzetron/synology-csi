@@ -6,7 +6,7 @@ metadata:
   labels: {{- include "synology-csi.labels" $ | nindent 4 }}
   name: csi.san.synology.com
 spec:
-  attachRequired: true # Indicates the driver requires an attach operation (TODO: ControllerPublishVolume should be implemented)
+  attachRequired: false # ControllerPublishVolume is not implemented; attach must be skipped for correct volume lifecycle ordering
   podInfoOnMount: true
   volumeLifecycleModes:
     - Persistent

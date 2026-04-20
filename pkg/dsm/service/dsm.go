@@ -216,6 +216,23 @@ func (service *DsmService) createMappingTarget(dsm *webapi.DSM, spec *models.Cre
 	return targetInfo, nil
 }
 
+// rollbackIscsiLunAfterMappingFailure removes a partially-created iSCSI LUN/target after createMappingTarget fails.
+func (service *DsmService) rollbackIscsiLunAfterMappingFailure(dsm *webapi.DSM, lunUuid string, targetName string) {
+	if targetName != "" {
+		if ti, err := dsm.TargetGet(targetName); err == nil {
+			if err := dsm.TargetDelete(strconv.Itoa(ti.TargetId)); err != nil {
+				log.Errorf("[%s] rollback: TargetDelete(%s id=%d): %v", dsm.Ip, targetName, ti.TargetId, err)
+			}
+		}
+	}
+	if lunUuid == "" {
+		return
+	}
+	if err := dsm.LunDelete(lunUuid); err != nil {
+		log.Errorf("[%s] rollback: LunDelete(%s): %v", dsm.Ip, lunUuid, err)
+	}
+}
+
 func (service *DsmService) createVolumeByDsm(dsm *webapi.DSM, spec *models.CreateK8sVolumeSpec) (*models.K8sVolumeRespSpec, error) {
 	// 1. Find a available location
 	if spec.Location == "" {
@@ -277,7 +294,7 @@ func (service *DsmService) createVolumeByDsm(dsm *webapi.DSM, spec *models.Creat
 	// 4. Create Target and Map to Lun
 	targetInfo, err := service.createMappingTarget(dsm, spec, lunInfo.Uuid)
 	if err != nil {
-		// FIXME need to delete lun and target
+		service.rollbackIscsiLunAfterMappingFailure(dsm, lunInfo.Uuid, spec.TargetName)
 		return nil,
 			status.Errorf(codes.Internal, fmt.Sprintf("Failed to create and map target, err: %v", err))
 	}
@@ -347,7 +364,7 @@ func (service *DsmService) createVolumeBySnapshot(dsm *webapi.DSM, spec *models.
 
 	targetInfo, err := service.createMappingTarget(dsm, spec, lunInfo.Uuid)
 	if err != nil {
-		// FIXME need to delete lun and target
+		service.rollbackIscsiLunAfterMappingFailure(dsm, lunInfo.Uuid, spec.TargetName)
 		return nil,
 			status.Errorf(codes.Internal, fmt.Sprintf("Failed to create and map target, err: %v", err))
 	}
@@ -389,7 +406,7 @@ func (service *DsmService) createVolumeByVolume(dsm *webapi.DSM, spec *models.Cr
 
 	targetInfo, err := service.createMappingTarget(dsm, spec, lunInfo.Uuid)
 	if err != nil {
-		// FIXME need to delete lun and target
+		service.rollbackIscsiLunAfterMappingFailure(dsm, lunInfo.Uuid, spec.TargetName)
 		return nil,
 			status.Errorf(codes.Internal, fmt.Sprintf("Failed to create and map target, err: %v", err))
 	}

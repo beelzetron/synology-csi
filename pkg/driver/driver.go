@@ -25,7 +25,7 @@ import (
 
 const (
 	DriverName    = "csi.san.synology.com" // CSI dirver name
-	DriverVersion = "1.2.1"
+	DriverVersion = "1.3.0"
 )
 
 var (
@@ -40,28 +40,32 @@ type IDriver interface {
 
 type Driver struct {
 	// *csicommon.CSIDriver
-	name       string
-	nodeID     string
-	version    string
-	endpoint   string
-	tools      tools
-	csCap      []*csi.ControllerServiceCapability
-	vCap       []*csi.VolumeCapability_AccessMode
-	nsCap      []*csi.NodeServiceCapability
-	DsmService interfaces.IDsmService
+	name             string
+	nodeID           string
+	version          string
+	endpoint         string
+	csiPluginDataDir string
+	hostRoot         string
+	tools            tools
+	csCap            []*csi.ControllerServiceCapability
+	vCap             []*csi.VolumeCapability_AccessMode
+	nsCap            []*csi.NodeServiceCapability
+	DsmService       interfaces.IDsmService
 }
 
-func NewControllerAndNodeDriver(nodeID string, endpoint string, dsmService interfaces.IDsmService, tools tools) (*Driver, error) {
+func NewControllerAndNodeDriver(nodeID string, endpoint string, dsmService interfaces.IDsmService, tools tools, hostRoot string) (*Driver, error) {
 	log.Debugf("NewControllerAndNodeDriver: DriverName: %v, DriverVersion: %v", DriverName, DriverVersion)
 
 	// TODO version format and validation
 	d := &Driver{
-		name:       DriverName,
-		version:    DriverVersion,
-		nodeID:     nodeID,
-		endpoint:   endpoint,
-		DsmService: dsmService,
-		tools:      tools,
+		name:             DriverName,
+		version:          DriverVersion,
+		nodeID:           nodeID,
+		endpoint:         endpoint,
+		csiPluginDataDir: csiPluginDataDirFromEndpoint(endpoint),
+		hostRoot:         hostRoot,
+		DsmService:       dsmService,
+		tools:            tools,
 	}
 
 	d.addControllerServiceCapabilities([]csi.ControllerServiceCapability_RPC_Type{

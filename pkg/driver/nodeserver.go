@@ -217,27 +217,8 @@ func (ns *nodeServer) loginTarget(volumeId string) ([]string, error) {
 		paths = append(paths, path)
 	}
 
+	ns.persistISCITeardownAfterLogin(volumeId, paths)
 	return paths, nil
-}
-
-func (ns *nodeServer) logoutTarget(volumeId string) {
-	k8sVolume := ns.dsmService.GetVolume(volumeId)
-
-	if k8sVolume == nil || k8sVolume.Protocol != utils.ProtocolIscsi {
-		return
-	}
-
-	// Assume target and lun 1-1 mapping
-	mappingIndex := k8sVolume.Target.MappedLuns[0].MappingIndex
-	volumeMountPath := ns.tools.getExistedVolumeMountPath(k8sVolume.Target.Iqn, mappingIndex)
-
-	if strings.Contains(volumeMountPath, "/dev/mapper") && ns.tools.IsMultipathEnabled() {
-		if err := ns.tools.multipath_flush(volumeMountPath); err != nil {
-			log.Errorf("Failed to remove multipath device in path %s. err: %v", volumeMountPath, err)
-		}
-	}
-
-	ns.Initiator.logout(k8sVolume.Target.Iqn, k8sVolume.DsmIp)
 }
 
 func checkGidPresentInMountFlags(volumeMountGroup string, mountFlags []string) (bool, error) {
@@ -529,6 +510,8 @@ func (ns *nodeServer) NodeUnstageVolume(ctx context.Context, req *csi.NodeUnstag
 		return nil, status.Error(codes.InvalidArgument, "Target path missing in request")
 	}
 
+	defer ns.logoutTarget(volumeID, stagingTargetPath)
+
 	notMount, err := mount.IsNotMountPoint(ns.Mounter.Interface, stagingTargetPath)
 	if err != nil {
 		return nil, status.Error(codes.Internal, err.Error())
@@ -539,8 +522,6 @@ func (ns *nodeServer) NodeUnstageVolume(ctx context.Context, req *csi.NodeUnstag
 			return nil, status.Error(codes.Internal, err.Error())
 		}
 	}
-
-	ns.logoutTarget(volumeID)
 
 	return &csi.NodeUnstageVolumeResponse{}, nil
 }

@@ -20,6 +20,10 @@ const (
 )
 
 func TestSanity(t *testing.T) {
+	if testing.Short() {
+		t.Skip("CSI sanity requires a live DSM and config/client-info.yml; run without -short or use make test-sanity")
+	}
+
 	nodeID := "CSINode"
 
 	endpointFile, err := ioutil.TempFile("", "csi-gcs.*.sock")
@@ -66,7 +70,7 @@ func TestSanity(t *testing.T) {
 	tools := driver.NewTools(cmdExecutor)
 
 	endpoint := "unix://" + endpointFile.Name()
-	drv, err := driver.NewControllerAndNodeDriver(nodeID, endpoint, dsmService, tools)
+	drv, err := driver.NewControllerAndNodeDriver(nodeID, endpoint, dsmService, tools, "")
 	if err != nil {
 		t.Fatal(fmt.Sprintf("Failed to create driver: %v\n", err))
 	}
