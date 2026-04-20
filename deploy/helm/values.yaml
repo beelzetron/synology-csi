@@ -83,6 +83,7 @@ storageClasses:
     ##  dsm: "1.1.1.1"
     ##  fsType: ext4
     ##  location: /volume1
+    ##  allowMultipleSessions: "true"  # iSCSI only; optional multi-session for RWO remount after node restarts (see README)
   # synology-iscsi-storage-delete:
   #   reclaimPolicy: Delete
 volumeSnapshotClasses:
