@@ -165,7 +165,7 @@ func lsblk(devicePaths []string, strict bool) ([]Device, error) {
 	lines := strings.Split(strings.Trim(string(out), "\n"), "\n")
 	for _, line := range lines {
 		columns := strings.Split(line, " ")
-		if len(columns) < 5 {
+		if len(columns) < 7 {
 			return nil, fmt.Errorf("invalid output from lsblk: %s", line)
 		}
 		device := &Device{

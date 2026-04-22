@@ -92,6 +92,9 @@ func (dsm *DSM) sendRequestWithoutConnectionCheck(data string, apiTemplate inter
 	} else {
 		req, err = http.NewRequest("GET", baseUrl.String(), nil)
 	}
+	if err != nil {
+		return Response{}, err
+	}
 
 	if dsm.Sid != "" {
 		cookie := http.Cookie{Name: "id", Value: dsm.Sid}
@@ -154,10 +157,6 @@ func (dsm *DSM) sendRequestWithoutConnectionCheck(data string, apiTemplate inter
 	}
 
 	outResp.Data = apiTemplate
-
-	if err != nil {
-		return Response{}, err
-	}
 
 	return outResp, nil
 }

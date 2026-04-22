@@ -195,6 +195,10 @@ func (ns *nodeServer) loginTarget(volumeId string) ([]string, error) {
 		return nil, status.Error(codes.NotFound, fmt.Sprintf("Volume[%s] is not found", volumeId))
 	}
 
+	if len(k8sVolume.Target.MappedLuns) < 1 {
+		return nil, status.Error(codes.Internal, fmt.Sprintf("Volume[%s] has no mapped LUNs", volumeId))
+	}
+
 	portals := ns.getPortals(k8sVolume.DsmIp)
 	if len(portals) == 0 {
 		return nil, status.Errorf(codes.Internal, fmt.Sprintf("Failed to get portals"))
@@ -765,9 +769,13 @@ func (ns *nodeServer) NodeGetVolumeStats(ctx context.Context, req *csi.NodeGetVo
 
 func (ns *nodeServer) NodeExpandVolume(ctx context.Context, req *csi.NodeExpandVolumeRequest) (*csi.NodeExpandVolumeResponse, error) {
 	volumeId, volumePath := req.GetVolumeId(), req.GetVolumePath()
-	sizeInByte, err := getSizeByCapacityRange(req.GetCapacityRange())
 	if volumeId == "" || volumePath == "" {
 		return nil, status.Error(codes.InvalidArgument, "InvalidArgument: Please check volume ID and volume path.")
+	}
+
+	sizeInByte, err := getSizeByCapacityRange(req.GetCapacityRange())
+	if err != nil {
+		return nil, err
 	}
 
 	k8sVolume := ns.dsmService.GetVolume(volumeId)
@@ -778,6 +786,10 @@ func (ns *nodeServer) NodeExpandVolume(ctx context.Context, req *csi.NodeExpandV
 	if k8sVolume.Protocol == utils.ProtocolSmb || k8sVolume.Protocol == utils.ProtocolNfs {
 		return &csi.NodeExpandVolumeResponse{
 			CapacityBytes: sizeInByte}, nil
+	}
+
+	if len(k8sVolume.Target.MappedLuns) < 1 {
+		return nil, status.Error(codes.Internal, fmt.Sprintf("Volume[%s] has no mapped LUNs", volumeId))
 	}
 
 	if err := ns.Initiator.rescan(k8sVolume.Target.Iqn); err != nil {
