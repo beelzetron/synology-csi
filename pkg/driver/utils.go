@@ -149,12 +149,12 @@ func RunControllerandNodePublishServer(endpoint string, d *Driver, cs csi.Contro
 
 func logGRPC(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
 	log.Infof("GRPC call: %s", info.FullMethod)
-	log.Infof("GRPC request: %s", protosanitizer.StripSecrets(req))
+	log.Debugf("GRPC request: %s", protosanitizer.StripSecrets(req))
 	resp, err := handler(ctx, req)
 	if err != nil {
 		log.Errorf("GRPC error: %v", err)
 	} else {
-		log.Infof("GRPC response: %s", protosanitizer.StripSecrets(resp))
+		log.Debugf("GRPC response: %s", protosanitizer.StripSecrets(resp))
 	}
 	return resp, err
 }
