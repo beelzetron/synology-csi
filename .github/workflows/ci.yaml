@@ -33,3 +33,6 @@ jobs:
 
       - name: Build binary
         run: make build
+
+      - name: Unit tests
+        run: make test

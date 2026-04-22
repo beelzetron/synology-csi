@@ -8,14 +8,39 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"net/http"
 	"net/url"
 	"regexp"
+	"time"
 
 	"github.com/SynologyOpenSource/synology-csi/pkg/logger"
 	log "github.com/sirupsen/logrus"
 )
+
+// loginErrorQueryScrubber removes password material from serialized query strings
+// in error messages (best-effort; used on login failures).
+var loginErrorQueryScrubber = regexp.MustCompile(`passwd=.*&`)
+
+// defaultDSMRequestTimeout bounds each DSM HTTP round-trip so stuck storage or
+// network partitions cannot block CSI RPCs indefinitely.
+const defaultDSMRequestTimeout = 2 * time.Minute
+
+func newDSMHTTPClient(https bool) *http.Client {
+	if https {
+		tr := &http.Transport{
+			TLSClientConfig: &tls.Config{
+				MinVersion:         tls.VersionTLS12,
+				InsecureSkipVerify: true,
+			},
+		}
+		return &http.Client{
+			Transport: tr,
+			Timeout:   defaultDSMRequestTimeout,
+		}
+	}
+	return &http.Client{Timeout: defaultDSMRequestTimeout}
+}
 
 type DSM struct {
 	Ip         string
@@ -58,7 +83,7 @@ func (dsm *DSM) sendRequest(data string, apiTemplate interface{}, params url.Val
 }
 
 func (dsm *DSM) sendRequestWithoutConnectionCheck(data string, apiTemplate interface{}, params url.Values, cgiPath string) (Response, error) {
-	client := &http.Client{}
+	client := newDSMHTTPClient(dsm.Https)
 	var req *http.Request
 	var err error
 	var cgiUrl string
@@ -66,11 +91,6 @@ func (dsm *DSM) sendRequestWithoutConnectionCheck(data string, apiTemplate inter
 	// Ex: http://10.12.12.14:5000/webapi/auth.cgi
 	if dsm.Https {
 		// TODO: input CA certificate and fill in tls config
-		// Skip Verify when https
-		tr := &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-		}
-		client = &http.Client{Transport: tr}
 		cgiUrl = fmt.Sprintf("https://%s:%d/%s", dsm.Ip, dsm.Port, cgiPath)
 	} else {
 		cgiUrl = fmt.Sprintf("http://%s:%d/%s", dsm.Ip, dsm.Port, cgiPath)
@@ -110,7 +130,7 @@ func (dsm *DSM) sendRequestWithoutConnectionCheck(data string, apiTemplate inter
 	// For debug print text body
 	var bodyText []byte
 	if logger.WebapiDebug {
-		bodyText, err = ioutil.ReadAll(resp.Body)
+		bodyText, err = io.ReadAll(resp.Body)
 		if err != nil {
 			return Response{}, err
 		}
@@ -177,10 +197,7 @@ func (dsm *DSM) Login() error {
 
 	resp, err := dsm.sendRequestWithoutConnectionCheck("", &LoginResp{}, params, "webapi/auth.cgi")
 	if err != nil {
-		r, _ := regexp.Compile("passwd=.*&")
-		temp := r.ReplaceAllString(err.Error(), "")
-
-		return fmt.Errorf("%s", temp)
+		return fmt.Errorf("%s", loginErrorQueryScrubber.ReplaceAllString(err.Error(), ""))
 	}
 
 	loginResp, ok := resp.Data.(*LoginResp)

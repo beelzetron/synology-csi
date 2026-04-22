@@ -5,6 +5,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"os/signal"
 	"syscall"
@@ -72,10 +73,13 @@ func driverStart() error {
 	}
 
 	for _, client := range info.Clients {
-		err := dsmService.AddDsm(client)
-		if err != nil {
+		if err := dsmService.AddDsm(client); err != nil {
 			log.Errorf("Failed to add DSM: %s, error: %v", client.Host, err)
+			return fmt.Errorf("add DSM %s: %w", client.Host, err)
 		}
+	}
+	if dsmService.GetDsmsCount() == 0 {
+		return fmt.Errorf("no DSM clients configured in %s", csiClientInfoPath)
 	}
 	defer dsmService.RemoveAllDsms()
 
