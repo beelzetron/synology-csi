@@ -27,6 +27,7 @@ import (
 	log "github.com/sirupsen/logrus"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
+	"golang.org/x/sync/singleflight"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -40,6 +41,9 @@ type controllerServer struct {
 	Driver     *Driver
 	dsmService interfaces.IDsmService
 	Initiator  *initiatorDriver
+
+	// createVolumeFlight coalesces concurrent CreateVolume RPCs with the same CSI volume name.
+	createVolumeFlight singleflight.Group
 }
 
 func getSizeByCapacityRange(capRange *csi.CapacityRange) (int64, error) {
@@ -227,36 +231,41 @@ func (cs *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 	}
 
 	spec := &models.CreateK8sVolumeSpec{
-		DsmIp:            params["dsm"],
-		K8sVolumeName:    volName,
-		LunName:          models.GenLunName(volName),
-		LunDescription:   lunDescription,
-		ShareName:        models.GenShareName(volName),
-		Location:         params["location"],
-		Size:             sizeInByte,
-		Type:             params["type"],
-		ThinProvisioning: isThin,
-		TargetName:       fmt.Sprintf("%s-%s", models.TargetPrefix, volName),
-		MultipleSession:  multiSession,
-		SourceSnapshotId: srcSnapshotId,
-		SourceVolumeId:   srcVolumeId,
-		Protocol:         protocol,
-		NfsVersion:       nfsVer,
-		DevAttribs:       devAttribs,
+		DsmIp:               params["dsm"],
+		K8sVolumeName:       volName,
+		LunName:             models.GenLunName(volName),
+		LunDescription:      lunDescription,
+		ShareName:           models.GenShareName(volName),
+		Location:            params["location"],
+		Size:                sizeInByte,
+		Type:                params["type"],
+		ThinProvisioning:    isThin,
+		TargetName:          fmt.Sprintf("%s-%s", models.TargetPrefix, volName),
+		MultipleSession:     multiSession,
+		SourceSnapshotId:    srcSnapshotId,
+		SourceVolumeId:      srcVolumeId,
+		Protocol:            protocol,
+		NfsVersion:          nfsVer,
+		DevAttribs:          devAttribs,
 		IscsiInterfaceNames: parseIscsiInterfaceNames(params["iscsiInterfaceNames"]),
 	}
 
-	// idempotency
+	// Idempotency and in-flight coalescing: overlapping CreateVolume calls (e.g. provisioner
+	// retry while clone runs) share one GetVolumeByName + CreateVolume execution per CSI name.
 	// Note: an SMB PV may not be tested existed precisely because the share folder name was sliced from k8sVolumeName
-	k8sVolume := cs.dsmService.GetVolumeByName(volName)
-	if k8sVolume == nil {
-		k8sVolume, err = cs.dsmService.CreateVolume(spec)
-		if err != nil {
-			return nil, err
+	val, flightErr, _ := cs.createVolumeFlight.Do(volName, func() (interface{}, error) {
+		if kv := cs.dsmService.GetVolumeByName(volName); kv != nil {
+			log.Debugf("Volume [%s] already exists in [%s], backing name: [%s]", volName, kv.DsmIp, kv.Name)
+			return kv, nil
 		}
-	} else {
-		// already existed
-		log.Debugf("Volume [%s] already exists in [%s], backing name: [%s]", volName, k8sVolume.DsmIp, k8sVolume.Name)
+		return cs.dsmService.CreateVolume(spec)
+	})
+	if flightErr != nil {
+		return nil, flightErr
+	}
+	k8sVolume, ok := val.(*models.K8sVolumeRespSpec)
+	if !ok || k8sVolume == nil {
+		return nil, status.Error(codes.Internal, "CreateVolume: unexpected DSM service response type")
 	}
 
 	if (k8sVolume.Protocol == utils.ProtocolIscsi && k8sVolume.SizeInBytes != sizeInByte) ||
