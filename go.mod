@@ -11,6 +11,7 @@ require (
 	github.com/moby/sys/mountinfo v0.6.2
 	github.com/sirupsen/logrus v1.7.0
 	github.com/spf13/cobra v1.1.3
+	golang.org/x/sync v0.8.0
 	golang.org/x/sys v0.13.0
 	google.golang.org/grpc v1.56.3
 	google.golang.org/protobuf v1.30.0

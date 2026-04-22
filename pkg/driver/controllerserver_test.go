@@ -18,7 +18,10 @@ package driver
 
 import (
 	"context"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
 
@@ -320,5 +323,75 @@ func TestCreateVolume_AllowMultipleSessions_NonIscsi(t *testing.T) {
 			// based on access mode, but it's not used by the share volume logic.
 			// The parameter should not cause an error.
 		})
+	}
+}
+
+func TestCreateVolume_concurrentSameNameSingleFlight(t *testing.T) {
+	var createCalls int32
+	proceed := make(chan struct{})
+
+	mock := &mockDsmService{
+		getVolumeByName: nil,
+		createVolumeFunc: func(spec *models.CreateK8sVolumeSpec) (*models.K8sVolumeRespSpec, error) {
+			atomic.AddInt32(&createCalls, 1)
+			<-proceed
+			return &models.K8sVolumeRespSpec{
+				VolumeId:    "coalesced-volume-id",
+				SizeInBytes: spec.Size,
+				Protocol:    spec.Protocol,
+				DsmIp:       "192.0.2.1",
+			}, nil
+		},
+	}
+
+	cs := newTestControllerServer(mock)
+	req := &csi.CreateVolumeRequest{
+		Name: "pvc-concurrent-coalesce",
+		CapacityRange: &csi.CapacityRange{
+			RequiredBytes: 1 * 1024 * 1024 * 1024,
+		},
+		VolumeCapabilities: []*csi.VolumeCapability{
+			{
+				AccessMode: &csi.VolumeCapability_AccessMode{
+					Mode: csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER,
+				},
+				AccessType: &csi.VolumeCapability_Mount{
+					Mount: &csi.VolumeCapability_MountVolume{},
+				},
+			},
+		},
+		Parameters: map[string]string{
+			"protocol": "iscsi",
+			"location": "/volume1",
+		},
+	}
+
+	ctx := context.Background()
+	var wg sync.WaitGroup
+	var err1, err2 error
+	var resp1, resp2 *csi.CreateVolumeResponse
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		resp1, err1 = cs.CreateVolume(ctx, req)
+	}()
+	go func() {
+		defer wg.Done()
+		resp2, err2 = cs.CreateVolume(ctx, req)
+	}()
+
+	// Let both goroutines enter singleflight before unblocking the lone DSM CreateVolume.
+	time.Sleep(100 * time.Millisecond)
+	close(proceed)
+	wg.Wait()
+
+	if err1 != nil || err2 != nil {
+		t.Fatalf("errors: %v ; %v", err1, err2)
+	}
+	if atomic.LoadInt32(&createCalls) != 1 {
+		t.Fatalf("dsm CreateVolume calls = %d, want 1", createCalls)
+	}
+	if resp1.Volume.VolumeId != "coalesced-volume-id" || resp2.Volume.VolumeId != "coalesced-volume-id" {
+		t.Fatalf("VolumeIds: %q %q", resp1.Volume.VolumeId, resp2.Volume.VolumeId)
 	}
 }
