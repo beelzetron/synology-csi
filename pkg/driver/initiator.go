@@ -62,7 +62,7 @@ func (t *tools) iscsiadm(cmdArgs ...string) utilexec.Cmd {
 	return t.executor.Command("iscsiadm", cmdArgs...)
 }
 
-// parseSession takes the raw stdout from the `iscsiadm -m session` command and encodes it into an iSCSI session type
+// parseSessions takes the raw stdout from the `iscsiadm -m session` command and encodes it into an iSCSI session type
 func parseSessions(lines string) []iscsiSession {
 	entries := strings.Split(strings.TrimSpace(lines), "\n")
 	r := strings.NewReplacer("[", "",
@@ -79,12 +79,14 @@ func parseSessions(lines string) []iscsiSession {
 		id64, _ := strconv.ParseInt(id, 10, 32)
 		portal := strings.Split(e[2], ",")[0]
 
+		_, iqnName, _ := strings.Cut(e[3], ":")
+
 		s := iscsiSession{
 			Protocol: protocol,
 			Id:       int32(id64),
 			Portal:   portal,
 			Iqn:      e[3],
-			Name:     strings.Split(e[3], ":")[1],
+			Name:     iqnName,
 		}
 		sessions = append(sessions, s)
 	}

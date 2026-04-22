@@ -64,7 +64,10 @@ func BoolToInt(value bool) int {
 
 // Haven't supported IPv6 yet.
 func LookupIPv4(name string) ([]string, error) {
-	ips, _ := net.LookupIP(name)
+	ips, err := net.LookupIP(name)
+	if err != nil {
+		return nil, fmt.Errorf("Failed to LookupIPv4 by local resolver for: %s: %w", name, err)
+	}
 
 	retIps := []string{}
 	for _, ip := range ips {
