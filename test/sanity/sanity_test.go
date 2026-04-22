@@ -2,7 +2,6 @@ package sanitytest
 
 import (
 	"fmt"
-	"io/ioutil"
 	"os"
 	"testing"
 
@@ -26,19 +25,20 @@ func TestSanity(t *testing.T) {
 
 	nodeID := "CSINode"
 
-	endpointFile, err := ioutil.TempFile("", "csi-gcs.*.sock")
+	endpointFile, err := os.CreateTemp("", "csi-gcs.*.sock")
 	if err != nil {
 		t.Fatal(err)
 	}
+	endpointFile.Close()
 	defer os.Remove(endpointFile.Name())
 
-	stagingPath, err := ioutil.TempDir("", "csi-gcs-staging")
+	stagingPath, err := os.MkdirTemp("", "csi-gcs-staging")
 	if err != nil {
 		t.Fatal(err)
 	}
 	os.Remove(stagingPath)
 
-	targetPath, err := ioutil.TempDir("", "csi-gcs-target")
+	targetPath, err := os.MkdirTemp("", "csi-gcs-target")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -52,9 +52,8 @@ func TestSanity(t *testing.T) {
 	dsmService := service.NewDsmService()
 
 	for _, client := range info.Clients {
-		err := dsmService.AddDsm(client)
-		if err != nil {
-			fmt.Printf("Failed to add DSM: %s, error: %v\n", client.Host, err)
+		if err := dsmService.AddDsm(client); err != nil {
+			t.Fatalf("add DSM %s: %v", client.Host, err)
 		}
 	}
 
