@@ -162,6 +162,20 @@ func (t *tools) iscsiadm_logout(iqn string) error {
 	return nil
 }
 
+// iscsiadm_node_delete_all removes all persisted open-iscsi node records for the IQN
+// (every discovered portal). Omitting --portal deletes all portals for that target.
+func (t *tools) iscsiadm_node_delete_all(iqn string) error {
+	cmd := t.iscsiadm(
+		"-m", "node",
+		"--targetname", iqn,
+		"--op", "delete")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("%s (%v)", string(out), err)
+	}
+	return nil
+}
+
 func (t *tools) iscsiadm_rescan(iqn string) error {
 	cmd := t.iscsiadm(
 		"-m", "node",
@@ -223,19 +237,21 @@ func (d *initiatorDriver) login(targetIqn string, portal string) error {
 }
 
 func (d *initiatorDriver) logout(targetIqn string, ip string) error {
-	if !d.tools.hasSession(targetIqn, "") {
+	if d.tools.hasSession(targetIqn, "") {
+		portal := fmt.Sprintf("%s:%d", ip, ISCSIPort)
+		if err := d.tools.iscsiadm_logout(targetIqn); err != nil {
+			log.Errorf("Failed in logout of the target.\nTarget [%s], Portal [%s], Err[%v]",
+				targetIqn, portal, err)
+			return err
+		}
+		log.Infof("Logout target portal [%s], iqn [%s].", portal, targetIqn)
+	} else {
 		log.Infof("Session[%s] doesn't exist.", targetIqn)
-		return nil
 	}
 
-	portal := fmt.Sprintf("%s:%d", ip, ISCSIPort)
-	if err := d.tools.iscsiadm_logout(targetIqn); err != nil {
-		log.Errorf("Failed in logout of the target.\nTarget [%s], Portal [%s], Err[%v]",
-			targetIqn, portal, err)
-		return err
+	if err := d.tools.iscsiadm_node_delete_all(targetIqn); err != nil {
+		log.Warnf("Failed to remove iscsi node DB records for target %s: %v", targetIqn, err)
 	}
-
-	log.Infof("Logout target portal [%s], iqn [%s].", portal, targetIqn)
 
 	return nil
 }
