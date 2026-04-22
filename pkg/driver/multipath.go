@@ -161,11 +161,12 @@ func lsblk(devicePaths []string, strict bool) ([]Device, error) {
 	devicesMap := make(map[string]*Device)
 	pkNames := []string{}
 
-	// Parse devices
+	// Parse devices (column count must match lsblk -o NAME,KNAME,PKNAME,HCTL,TYPE,TRAN,SIZE)
+	const lsblkColumnCount = 7
 	lines := strings.Split(strings.Trim(string(out), "\n"), "\n")
 	for _, line := range lines {
 		columns := strings.Split(line, " ")
-		if len(columns) < 7 {
+		if len(columns) < lsblkColumnCount {
 			return nil, fmt.Errorf("invalid output from lsblk: %s", line)
 		}
 		device := &Device{

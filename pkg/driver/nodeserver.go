@@ -195,13 +195,13 @@ func (ns *nodeServer) loginTarget(volumeId string) ([]string, error) {
 		return nil, status.Error(codes.NotFound, fmt.Sprintf("Volume[%s] is not found", volumeId))
 	}
 
-	if len(k8sVolume.Target.MappedLuns) < 1 {
+	if len(k8sVolume.Target.MappedLuns) == 0 {
 		return nil, status.Error(codes.Internal, fmt.Sprintf("Volume[%s] has no mapped LUNs", volumeId))
 	}
 
 	portals := ns.getPortals(k8sVolume.DsmIp)
 	if len(portals) == 0 {
-		return nil, status.Errorf(codes.Internal, fmt.Sprintf("Failed to get portals"))
+		return nil, status.Error(codes.Internal, "Failed to get portals")
 	}
 
 	// Assume target and lun 1-1 mapping
@@ -788,7 +788,7 @@ func (ns *nodeServer) NodeExpandVolume(ctx context.Context, req *csi.NodeExpandV
 			CapacityBytes: sizeInByte}, nil
 	}
 
-	if len(k8sVolume.Target.MappedLuns) < 1 {
+	if len(k8sVolume.Target.MappedLuns) == 0 {
 		return nil, status.Error(codes.Internal, fmt.Sprintf("Volume[%s] has no mapped LUNs", volumeId))
 	}
 
