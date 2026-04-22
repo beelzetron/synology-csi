@@ -325,7 +325,22 @@ func (service *DsmService) createVolumeByDsm(dsm *webapi.DSM, spec *models.Creat
 	return DsmLunToK8sVolume(dsm.Ip, lunInfo, targetInfo), nil
 }
 
-func waitCloneFinished(dsm *webapi.DSM, lunName string) error {
+// cloneDestLunUUID prefers the UUID returned by clone APIs; if empty, looks up by LUN name.
+func cloneDestLunUUID(dsm *webapi.DSM, lunName string, apiReturned string) (string, error) {
+	if apiReturned != "" {
+		return apiReturned, nil
+	}
+	lun, err := dsm.LunFindByName(lunName)
+	if err != nil {
+		if errors.Is(err, utils.NoSuchLunError("")) {
+			return "", fmt.Errorf("clone did not return UUID and LUN %q not found on DSM", lunName)
+		}
+		return "", err
+	}
+	return lun.Uuid, nil
+}
+
+func waitCloneFinished(dsm *webapi.DSM, lunUUID string) error {
 	maxWait := cloneWaitMaxElapsed()
 	cloneBackoff := backoff.NewExponentialBackOff()
 	cloneBackoff.InitialInterval = 1 * time.Second
@@ -334,13 +349,13 @@ func waitCloneFinished(dsm *webapi.DSM, lunName string) error {
 	cloneBackoff.MaxElapsedTime = maxWait
 
 	checkFinished := func() error {
-		lunInfo, err := dsm.LunGet(lunName)
+		lunInfo, err := dsm.LunGet(lunUUID)
 		if err != nil {
-			return backoff.Permanent(fmt.Errorf("Failed to get existed LUN with name: %s, err: %v", lunName, err))
+			return backoff.Permanent(fmt.Errorf("Failed to get LUN uuid: %s, err: %v", lunUUID, err))
 		}
 
 		if lunInfo.IsActionLocked != false {
-			return fmt.Errorf("Clone not yet completed. Lun: %s", lunName)
+			return fmt.Errorf("Clone not yet completed. Lun: %s (%s)", lunInfo.Name, lunUUID)
 		}
 		return nil
 	}
@@ -354,7 +369,7 @@ func waitCloneFinished(dsm *webapi.DSM, lunName string) error {
 		return fmt.Errorf("%w: %v", errCloneWaitTimeout, err)
 	}
 
-	log.Debugf("Clone successfully. Lun: %v", lunName)
+	log.Debugf("Clone successfully. Lun uuid: %v", lunUUID)
 	return nil
 }
 
@@ -369,31 +384,39 @@ func (service *DsmService) createVolumeBySnapshot(dsm *webapi.DSM, spec *models.
 		SrcSnapshotUuid: srcSnapshot.Uuid,
 	}
 
-	_, lunGetErr := dsm.LunGet(spec.LunName)
-	if lunGetErr != nil && !errors.Is(lunGetErr, utils.NoSuchLunError("")) {
+	existingLun, lunFindErr := dsm.LunFindByName(spec.LunName)
+	if lunFindErr != nil && !errors.Is(lunFindErr, utils.NoSuchLunError("")) {
 		return nil,
-			status.Errorf(codes.Internal, fmt.Sprintf("Failed to check destination LUN with name: %s, err: %v", spec.LunName, lunGetErr))
+			status.Errorf(codes.Internal, fmt.Sprintf("Failed to look up destination LUN by name: %s, err: %v", spec.LunName, lunFindErr))
 	}
-	if errors.Is(lunGetErr, utils.NoSuchLunError("")) {
-		if _, err := dsm.SnapshotClone(snapshotCloneSpec); err != nil && !errors.Is(err, utils.AlreadyExistError("")) {
+
+	var dstUUID string
+	if errors.Is(lunFindErr, utils.NoSuchLunError("")) {
+		cloneUUID, err := dsm.SnapshotClone(snapshotCloneSpec)
+		if err != nil && !errors.Is(err, utils.AlreadyExistError("")) {
 			return nil,
 				status.Errorf(codes.Internal, fmt.Sprintf("Failed to create volume with source snapshot ID: %s, err: %v", srcSnapshot.Uuid, err))
 		}
+		dstUUID, err = cloneDestLunUUID(dsm, spec.LunName, cloneUUID)
+		if err != nil {
+			return nil, status.Errorf(codes.Internal, err.Error())
+		}
 	} else {
 		log.Debugf("[%s] LUN %s already exists; skipping snapshot clone (idempotent retry or in-progress clone)", dsm.Ip, spec.LunName)
+		dstUUID = existingLun.Uuid
 	}
 
-	if err := waitCloneFinished(dsm, spec.LunName); err != nil {
+	if err := waitCloneFinished(dsm, dstUUID); err != nil {
 		if errors.Is(err, errCloneWaitTimeout) {
 			return nil, status.Errorf(codes.DeadlineExceeded, err.Error())
 		}
 		return nil, status.Errorf(codes.Internal, err.Error())
 	}
 
-	lunInfo, err := dsm.LunGet(spec.LunName)
+	lunInfo, err := dsm.LunGet(dstUUID)
 	if err != nil {
 		return nil,
-			status.Errorf(codes.Internal, fmt.Sprintf("Failed to get existed LUN with name: %s, err: %v", spec.LunName, err))
+			status.Errorf(codes.Internal, fmt.Sprintf("Failed to get LUN uuid: %s, err: %v", dstUUID, err))
 	}
 
 	targetInfo, err := service.createMappingTarget(dsm, spec, lunInfo.Uuid)
@@ -423,31 +446,39 @@ func (service *DsmService) createVolumeByVolume(dsm *webapi.DSM, spec *models.Cr
 		Location:   spec.Location,
 	}
 
-	_, lunGetErr := dsm.LunGet(spec.LunName)
-	if lunGetErr != nil && !errors.Is(lunGetErr, utils.NoSuchLunError("")) {
+	existingLun, lunFindErr := dsm.LunFindByName(spec.LunName)
+	if lunFindErr != nil && !errors.Is(lunFindErr, utils.NoSuchLunError("")) {
 		return nil,
-			status.Errorf(codes.Internal, fmt.Sprintf("Failed to check destination LUN with name: %s, err: %v", spec.LunName, lunGetErr))
+			status.Errorf(codes.Internal, fmt.Sprintf("Failed to look up destination LUN by name: %s, err: %v", spec.LunName, lunFindErr))
 	}
-	if errors.Is(lunGetErr, utils.NoSuchLunError("")) {
-		if _, err := dsm.LunClone(lunCloneSpec); err != nil && !errors.Is(err, utils.AlreadyExistError("")) {
+
+	var dstUUID string
+	if errors.Is(lunFindErr, utils.NoSuchLunError("")) {
+		cloneUUID, err := dsm.LunClone(lunCloneSpec)
+		if err != nil && !errors.Is(err, utils.AlreadyExistError("")) {
 			return nil,
 				status.Errorf(codes.Internal, fmt.Sprintf("Failed to create volume with source volume ID: %s, err: %v", srcLunInfo.Uuid, err))
 		}
+		dstUUID, err = cloneDestLunUUID(dsm, spec.LunName, cloneUUID)
+		if err != nil {
+			return nil, status.Errorf(codes.Internal, err.Error())
+		}
 	} else {
 		log.Debugf("[%s] LUN %s already exists; skipping lun clone (idempotent retry or in-progress clone)", dsm.Ip, spec.LunName)
+		dstUUID = existingLun.Uuid
 	}
 
-	if err := waitCloneFinished(dsm, spec.LunName); err != nil {
+	if err := waitCloneFinished(dsm, dstUUID); err != nil {
 		if errors.Is(err, errCloneWaitTimeout) {
 			return nil, status.Errorf(codes.DeadlineExceeded, err.Error())
 		}
 		return nil, status.Errorf(codes.Internal, err.Error())
 	}
 
-	lunInfo, err := dsm.LunGet(spec.LunName)
+	lunInfo, err := dsm.LunGet(dstUUID)
 	if err != nil {
 		return nil,
-			status.Errorf(codes.Internal, fmt.Sprintf("Failed to get existed LUN with name: %s, err: %v", spec.LunName, err))
+			status.Errorf(codes.Internal, fmt.Sprintf("Failed to get LUN uuid: %s, err: %v", dstUUID, err))
 	}
 
 	targetInfo, err := service.createMappingTarget(dsm, spec, lunInfo.Uuid)
