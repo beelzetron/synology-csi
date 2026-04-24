@@ -378,6 +378,13 @@ func (ns *nodeServer) nodeStageISCSIVolume(ctx context.Context, spec *models.Nod
 		return nil, status.Error(codes.Internal, err.Error())
 	}
 
+	stagedOK := false
+	defer func() {
+		if !stagedOK {
+			ns.logoutTarget(spec.VolumeId, spec.StagingTargetPath)
+		}
+	}()
+
 	volumeMountPath := getVolumeMountPath(iscsiDevPaths)
 	if volumeMountPath == "" {
 		return nil, status.Error(codes.Internal, "Can't get volume mount path")
@@ -389,6 +396,7 @@ func (ns *nodeServer) nodeStageISCSIVolume(ctx context.Context, spec *models.Nod
 	}
 
 	if !notMount {
+		stagedOK = true
 		return &csi.NodeStageVolumeResponse{}, nil
 	}
 
@@ -401,6 +409,7 @@ func (ns *nodeServer) nodeStageISCSIVolume(ctx context.Context, spec *models.Nod
 		return nil, status.Error(codes.Internal, err.Error())
 	}
 
+	stagedOK = true
 	return &csi.NodeStageVolumeResponse{}, nil
 }
 

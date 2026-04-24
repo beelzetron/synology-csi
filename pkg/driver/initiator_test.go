@@ -95,6 +95,50 @@ func TestLogoutWithSessionRunsLogoutThenNodeDelete(t *testing.T) {
 	}
 }
 
+// TestLogoutTwiceIdempotent covers NodeUnstageVolume calling logoutTarget after a stage-failure
+// rollback already tore down the same IQN (session gone, node records removed).
+func TestLogoutTwiceIdempotent(t *testing.T) {
+	t.Parallel()
+	iqn := "iqn.2000-01.com.synology:nas.pvc-double"
+	sessionLine := "tcp: [1] 192.168.1.10:3260,1 " + iqn + "\n"
+	ex := &seqFakeExecutor{
+		cfg: []stubCmd{
+			{out: []byte(sessionLine), err: nil},
+			{out: nil, err: nil},
+			{out: nil, err: nil},
+			{out: nil, err: exitCodeErr{code: 21}},
+			{out: nil, err: nil},
+		},
+	}
+	d := &initiatorDriver{tools: NewTools(ex)}
+	if err := d.logout(iqn, "192.168.1.10"); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.logout(iqn, "192.168.1.10"); err != nil {
+		t.Fatal(err)
+	}
+	want := [][]string{
+		{"iscsiadm", "-m", "session"},
+		{"iscsiadm", "-m", "node", "--targetname", iqn, "--logout"},
+		{"iscsiadm", "-m", "node", "--targetname", iqn, "--op", "delete"},
+		{"iscsiadm", "-m", "session"},
+		{"iscsiadm", "-m", "node", "--targetname", iqn, "--op", "delete"},
+	}
+	if len(ex.calls) != len(want) {
+		t.Fatalf("calls: got %d want %d: %#v", len(ex.calls), len(want), ex.calls)
+	}
+	for i := range want {
+		if len(ex.calls[i]) != len(want[i]) {
+			t.Fatalf("call %d len: got %v want %v", i, ex.calls[i], want[i])
+		}
+		for j := range want[i] {
+			if ex.calls[i][j] != want[i][j] {
+				t.Fatalf("call %d arg %d: got %q want %q", i, j, ex.calls[i][j], want[i][j])
+			}
+		}
+	}
+}
+
 func TestLogoutWithoutSessionStillDeletesNodeRecords(t *testing.T) {
 	t.Parallel()
 	iqn := "iqn.2000-01.com.synology:nas.pvc-orphan"
