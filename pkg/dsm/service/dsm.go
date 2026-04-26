@@ -157,7 +157,8 @@ func (service *DsmService) getFirstAvailableVolume(dsm *webapi.DSM, sizeInBytes 
 	for _, volInfo := range volInfos {
 		free, err := strconv.ParseInt(volInfo.Free, 10, 64)
 		if err != nil {
-			return webapi.VolInfo{}, err
+			log.Warnf("Failed to parse free space for volume %s: %v, skipping", volInfo.Path, err)
+			continue
 		}
 		if free < utils.UNIT_GB {
 			continue
@@ -748,6 +749,7 @@ func (service *DsmService) listISCSIVolumes(dsmIp string) (infos []*models.K8sVo
 				lun, err := dsm.LunGet(mapping.LunUuid)
 				if err != nil {
 					log.Errorf("[%s] Failed to get LUN(%s): %v", dsm.Ip, mapping.LunUuid, err)
+					continue
 				}
 
 				if !strings.HasPrefix(lun.Name, models.LunPrefix) {

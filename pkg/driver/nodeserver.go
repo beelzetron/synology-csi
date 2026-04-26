@@ -239,7 +239,7 @@ func checkGidPresentInMountFlags(volumeMountGroup string, mountFlags []string) (
 	return gidPresentInMountFlags, nil
 }
 
-func (ns *nodeServer) mountSensitiveWithRetry(sourcePath string, targetPath string, fsType string, options []string, sensitiveOptions []string) error {
+func (ns *nodeServer) mountSensitiveWithRetry(ctx context.Context, sourcePath string, targetPath string, fsType string, options []string, sensitiveOptions []string) error {
 	mountBackoff := backoff.NewExponentialBackOff()
 	mountBackoff.InitialInterval = 1 * time.Second
 	mountBackoff.Multiplier = 2
@@ -247,11 +247,10 @@ func (ns *nodeServer) mountSensitiveWithRetry(sourcePath string, targetPath stri
 	mountBackoff.MaxElapsedTime = 5 * time.Second
 
 	checkFinished := func() error {
-		if err := ns.Mounter.MountSensitive(sourcePath, targetPath, fsType, options, sensitiveOptions); err != nil {
-			return err
+		if err := ctx.Err(); err != nil {
+			return backoff.Permanent(err)
 		}
-
-		return nil
+		return ns.Mounter.MountSensitive(sourcePath, targetPath, fsType, options, sensitiveOptions)
 	}
 
 	mountNotify := func(err error, duration time.Duration) {
@@ -462,7 +461,7 @@ func (ns *nodeServer) nodeStageSMBVolume(ctx context.Context, spec *models.NodeS
 		options = append(options, fmt.Sprintf("%s=%s", "domain", domain))
 	}
 	var sensitiveOptions = []string{fmt.Sprintf("%s=%s,%s=%s", "username", username, "password", password)}
-	if err := ns.mountSensitiveWithRetry(spec.Source, targetPath, fsType, options, sensitiveOptions); err != nil {
+	if err := ns.mountSensitiveWithRetry(ctx, spec.Source, targetPath, fsType, options, sensitiveOptions); err != nil {
 		return nil, status.Error(codes.Internal,
 			fmt.Sprintf("Volume[%s] failed to mount %q on %q. err: %v", spec.VolumeId, spec.Source, targetPath, err))
 	}
