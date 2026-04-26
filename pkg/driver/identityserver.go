@@ -24,6 +24,7 @@ import (
 )
 
 type identityServer struct {
+	csi.UnimplementedIdentityServer
 	Driver *Driver
 }
 

@@ -38,6 +38,7 @@ import (
 )
 
 type controllerServer struct {
+	csi.UnimplementedControllerServer
 	Driver     *Driver
 	dsmService interfaces.IDsmService
 	Initiator  *initiatorDriver

@@ -5,7 +5,7 @@ import (
 	"os"
 	"testing"
 
-	sanity "github.com/kubernetes-csi/csi-test/v4/pkg/sanity"
+	sanity "github.com/kubernetes-csi/csi-test/v5/pkg/sanity"
 
 	"github.com/SynologyOpenSource/synology-csi/pkg/driver"
 	"github.com/SynologyOpenSource/synology-csi/pkg/dsm/common"
