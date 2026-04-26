@@ -42,6 +42,7 @@ import (
 )
 
 type nodeServer struct {
+	csi.UnimplementedNodeServer
 	Driver     *Driver
 	Mounter    *mount.SafeFormatAndMount
 	dsmService interfaces.IDsmService
