@@ -60,7 +60,6 @@ func TestSanity(t *testing.T) {
 	if dsmService.GetDsmsCount() == 0 {
 		t.Fatal("No available DSM.")
 	}
-	defer dsmService.RemoveAllDsms()
 
 	cmdExecutor, err := hostexec.New(nil, "")
 	if err != nil {
@@ -73,7 +72,14 @@ func TestSanity(t *testing.T) {
 	if err != nil {
 		t.Fatal(fmt.Sprintf("Failed to create driver: %v\n", err))
 	}
-	drv.Activate()
+	grpcSrv := drv.Activate()
+	t.Cleanup(func() { dsmService.RemoveAllDsms() })
+	t.Cleanup(func() {
+		if grpcSrv != nil {
+			grpcSrv.Stop()
+			grpcSrv.Wait()
+		}
+	})
 
 	// Set configuration options as needed
 	testConfig := sanity.NewTestConfig()

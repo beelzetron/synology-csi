@@ -10,6 +10,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/cenkalti/backoff/v4"
@@ -43,6 +44,7 @@ func cloneWaitMaxElapsed() time.Duration {
 }
 
 type DsmService struct {
+	mu   sync.RWMutex
 	dsms map[string]*webapi.DSM
 }
 
@@ -52,7 +54,21 @@ func NewDsmService() *DsmService {
 	}
 }
 
+// cloneDsms returns a snapshot of configured DSM clients for iteration without holding mu across DSM API calls.
+func (service *DsmService) cloneDsms() []*webapi.DSM {
+	service.mu.RLock()
+	defer service.mu.RUnlock()
+	out := make([]*webapi.DSM, 0, len(service.dsms))
+	for _, d := range service.dsms {
+		out = append(out, d)
+	}
+	return out
+}
+
 func (service *DsmService) AddDsm(client common.ClientInfo) error {
+	service.mu.Lock()
+	defer service.mu.Unlock()
+
 	// TODO: use sn or other identifiers as key
 	if _, ok := service.dsms[client.Host]; ok {
 		log.Infof("Adding DSM [%s] already present.", client.Host)
@@ -76,7 +92,14 @@ func (service *DsmService) AddDsm(client common.ClientInfo) error {
 }
 
 func (service *DsmService) RemoveAllDsms() {
-	for _, dsm := range service.dsms {
+	service.mu.Lock()
+	ds := make([]*webapi.DSM, 0, len(service.dsms))
+	for _, d := range service.dsms {
+		ds = append(ds, d)
+	}
+	service.mu.Unlock()
+
+	for _, dsm := range ds {
 		log.Infof("Going to logout DSM [%s]", dsm.Ip)
 
 		for i := 0; i < 3; i++ {
@@ -91,7 +114,9 @@ func (service *DsmService) RemoveAllDsms() {
 }
 
 func (service *DsmService) GetDsm(ip string) (*webapi.DSM, error) {
+	service.mu.RLock()
 	dsm, ok := service.dsms[ip]
+	service.mu.RUnlock()
 	if !ok {
 		return nil, fmt.Errorf("Requested dsm [%s] does not exist", ip)
 	}
@@ -99,13 +124,15 @@ func (service *DsmService) GetDsm(ip string) (*webapi.DSM, error) {
 }
 
 func (service *DsmService) GetDsmsCount() int {
+	service.mu.RLock()
+	defer service.mu.RUnlock()
 	return len(service.dsms)
 }
 
 func (service *DsmService) ListDsmVolumes(ip string) ([]webapi.VolInfo, error) {
 	var allVolInfos []webapi.VolInfo
 
-	for _, dsm := range service.dsms {
+	for _, dsm := range service.cloneDsms() {
 		if ip != "" && dsm.Ip != ip {
 			continue
 		}
@@ -629,7 +656,7 @@ func (service *DsmService) CreateVolume(spec *models.CreateK8sVolumeSpec) (*mode
 	}
 
 	/* Find appropriate dsm to create volume */
-	for _, dsm := range service.dsms {
+	for _, dsm := range service.cloneDsms() {
 		if spec.DsmIp != "" && spec.DsmIp != dsm.Ip {
 			continue
 		}
@@ -704,7 +731,7 @@ func (service *DsmService) DeleteVolume(volId string) error {
 }
 
 func (service *DsmService) listISCSIVolumes(dsmIp string) (infos []*models.K8sVolumeRespSpec) {
-	for _, dsm := range service.dsms {
+	for _, dsm := range service.cloneDsms() {
 		if dsmIp != "" && dsmIp != dsm.Ip {
 			continue
 		}
@@ -938,7 +965,7 @@ func (service *DsmService) listISCSISnapshotsByDsm(dsm *webapi.DSM) (infos []*mo
 func (service *DsmService) ListAllSnapshots() []*models.K8sSnapshotRespSpec {
 	var allInfos []*models.K8sSnapshotRespSpec
 
-	for _, dsm := range service.dsms {
+	for _, dsm := range service.cloneDsms() {
 		allInfos = append(allInfos, service.listISCSISnapshotsByDsm(dsm)...)
 		allInfos = append(allInfos, service.listSMBorNFSSnapshotsByDsm(dsm)...)
 	}
@@ -1016,7 +1043,7 @@ func DsmLunSnapshotToK8sSnapshot(dsmIp string, info webapi.SnapshotInfo, lunInfo
 }
 
 func (service *DsmService) getISCSISnapshot(snapshotUuid string) *models.K8sSnapshotRespSpec {
-	for _, dsm := range service.dsms {
+	for _, dsm := range service.cloneDsms() {
 		snapshots := service.listISCSISnapshotsByDsm(dsm)
 		for _, snap := range snapshots {
 			if snap.Uuid == snapshotUuid {
