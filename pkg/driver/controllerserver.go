@@ -192,7 +192,7 @@ func (cs *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 	// check mountPermissions valid
 	if mountPermissions != "" {
 		if _, err := strconv.ParseUint(mountPermissions, 8, 32); err != nil {
-			return nil, status.Errorf(codes.InvalidArgument, fmt.Sprintf("invalid mountPermissions %s in storage class", mountPermissions))
+			return nil, status.Errorf(codes.InvalidArgument, "invalid mountPermissions %s in storage class", mountPermissions)
 		}
 	}
 
@@ -299,8 +299,7 @@ func (cs *controllerServer) DeleteVolume(ctx context.Context, req *csi.DeleteVol
 	}
 
 	if err := cs.dsmService.DeleteVolume(volumeId); err != nil {
-		return nil, status.Errorf(codes.Internal,
-			fmt.Sprintf("Failed to DeleteVolume(%s), err: %v", volumeId, err))
+		return nil, status.Errorf(codes.Internal, "Failed to DeleteVolume(%s), err: %v", volumeId, err)
 	}
 
 	return &csi.DeleteVolumeResponse{}, nil
@@ -386,7 +385,7 @@ func (cs *controllerServer) ListVolumes(ctx context.Context, req *csi.ListVolume
 	}
 
 	if pagingSkip {
-		return nil, status.Errorf(codes.Aborted, fmt.Sprintf("Invalid StartingToken(%s)", startingToken))
+		return nil, status.Errorf(codes.Aborted, "Invalid StartingToken(%s)", startingToken)
 	}
 
 	return &csi.ListVolumesResponse{
@@ -449,10 +448,10 @@ func (cs *controllerServer) CreateSnapshot(ctx context.Context, req *csi.CreateS
 	if orgSnap != nil {
 		// already existed
 		if orgSnap.ParentUuid != srcVolId {
-			return nil, status.Errorf(codes.AlreadyExists, fmt.Sprintf("Snapshot [%s] already exists but volume id is incompatible", snapshotName))
+			return nil, status.Errorf(codes.AlreadyExists, "Snapshot [%s] already exists but volume id is incompatible", snapshotName)
 		}
 		if orgSnap.CreateTime < 0 {
-			return nil, status.Errorf(codes.Internal, fmt.Sprintf("Bad create time: %v", orgSnap.CreateTime))
+			return nil, status.Errorf(codes.Internal, "Bad create time: %v", orgSnap.CreateTime)
 		}
 		return &csi.CreateSnapshotResponse{
 			Snapshot: &csi.Snapshot{
@@ -500,7 +499,7 @@ func (cs *controllerServer) DeleteSnapshot(ctx context.Context, req *csi.DeleteS
 
 	err := cs.dsmService.DeleteSnapshot(snapshotId)
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, fmt.Sprintf("Failed to DeleteSnapshot(%s), err: %v", snapshotId, err))
+		return nil, status.Errorf(codes.Internal, "Failed to DeleteSnapshot(%s), err: %v", snapshotId, err)
 	}
 
 	return &csi.DeleteSnapshotResponse{}, nil
@@ -562,7 +561,7 @@ func (cs *controllerServer) ListSnapshots(ctx context.Context, req *csi.ListSnap
 	}
 
 	if pagingSkip {
-		return nil, status.Errorf(codes.Aborted, fmt.Sprintf("Invalid StartingToken(%s)", startingToken))
+		return nil, status.Errorf(codes.Aborted, "Invalid StartingToken(%s)", startingToken)
 	}
 
 	return &csi.ListSnapshotsResponse{

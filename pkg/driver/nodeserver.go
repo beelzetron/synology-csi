@@ -209,14 +209,13 @@ func (ns *nodeServer) loginTarget(volumeId string) ([]string, error) {
 	mappingIndex := k8sVolume.Target.MappedLuns[0].MappingIndex
 	for _, portal := range portals {
 		if err := ns.Initiator.login(k8sVolume.Target.Iqn, portal); err != nil {
-			return nil, status.Errorf(codes.Internal,
-				fmt.Sprintf("Failed to login with target iqn [%s], err: %v", k8sVolume.Target.Iqn, err))
+			return nil, status.Errorf(codes.Internal, "Failed to login with target iqn [%s], err: %v", k8sVolume.Target.Iqn, err)
 		}
 
 		path := fmt.Sprintf("%sip-%s-iscsi-%s-lun-%d", "/dev/disk/by-path/", portal, k8sVolume.Target.Iqn, mappingIndex)
 		if err := waitForDevicePathToExist(path); err != nil {
 			log.Errorf("Can't find device path [%s]: %v", path, err)
-			return nil, status.Errorf(codes.Internal, fmt.Sprintf("Can't find device path [%s]: %v", path, err))
+			return nil, status.Errorf(codes.Internal, "Can't find device path [%s]: %v", path, err)
 		}
 
 		paths = append(paths, path)
@@ -576,7 +575,7 @@ func (ns *nodeServer) NodePublishVolume(ctx context.Context, req *csi.NodePublis
 					var err error
 					mountPermissionsUint, err = strconv.ParseUint(v, 8, 32)
 					if err != nil {
-						return nil, status.Errorf(codes.InvalidArgument, fmt.Sprintf("invalid mountPermissions %s", v))
+						return nil, status.Errorf(codes.InvalidArgument, "invalid mountPermissions %s", v)
 					}
 				}
 			}
@@ -672,7 +671,7 @@ func (ns *nodeServer) NodeUnpublishVolume(ctx context.Context, req *csi.NodeUnpu
 		if os.IsNotExist(err) {
 			return &csi.NodeUnpublishVolumeResponse{}, nil
 		}
-		return nil, status.Errorf(codes.Internal, err.Error())
+		return nil, status.Error(codes.Internal, err.Error())
 	}
 
 	notMount, err := mount.IsNotMountPoint(ns.Mounter.Interface, targetPath)
