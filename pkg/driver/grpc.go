@@ -47,17 +47,17 @@ func NewNonBlockingGRPCServer() NonBlockingGRPCServer {
 
 // NonBlocking server
 type nonBlockingGRPCServer struct {
+	mu     sync.RWMutex
 	wg     sync.WaitGroup
 	server *grpc.Server
 }
 
 func (s *nonBlockingGRPCServer) Start(endpoint string, ids csi.IdentityServer, cs csi.ControllerServer, ns csi.NodeServer) {
-
 	s.wg.Add(1)
-
-	go s.serve(endpoint, ids, cs, ns)
-
-	return
+	go func() {
+		defer s.wg.Done()
+		s.serve(endpoint, ids, cs, ns)
+	}()
 }
 
 func (s *nonBlockingGRPCServer) Wait() {
@@ -65,11 +65,21 @@ func (s *nonBlockingGRPCServer) Wait() {
 }
 
 func (s *nonBlockingGRPCServer) Stop() {
-	s.server.GracefulStop()
+	s.mu.RLock()
+	srv := s.server
+	s.mu.RUnlock()
+	if srv != nil {
+		srv.GracefulStop()
+	}
 }
 
 func (s *nonBlockingGRPCServer) ForceStop() {
-	s.server.Stop()
+	s.mu.RLock()
+	srv := s.server
+	s.mu.RUnlock()
+	if srv != nil {
+		srv.Stop()
+	}
 }
 
 func (s *nonBlockingGRPCServer) serve(endpoint string, ids csi.IdentityServer, cs csi.ControllerServer, ns csi.NodeServer) {
@@ -95,7 +105,9 @@ func (s *nonBlockingGRPCServer) serve(endpoint string, ids csi.IdentityServer, c
 		grpc.UnaryInterceptor(logGRPC),
 	}
 	server := grpc.NewServer(opts...)
+	s.mu.Lock()
 	s.server = server
+	s.mu.Unlock()
 
 	if ids != nil {
 		csi.RegisterIdentityServer(server, ids)

@@ -35,7 +35,7 @@ var (
 )
 
 type IDriver interface {
-	Activate()
+	Activate() NonBlockingGRPCServer
 }
 
 type Driver struct {
@@ -97,10 +97,8 @@ func NewControllerAndNodeDriver(nodeID string, endpoint string, dsmService inter
 // TODO: func NewNodeDriver() {}
 // TODO: func NewControllerDriver() {}
 
-func (d *Driver) Activate() {
-	go func() {
-		RunControllerandNodePublishServer(d.endpoint, d, NewControllerServer(d), NewNodeServer(d))
-	}()
+func (d *Driver) Activate() NonBlockingGRPCServer {
+	return RunControllerandNodePublishServer(d.endpoint, d, NewControllerServer(d), NewNodeServer(d))
 }
 
 func (d *Driver) addControllerServiceCapabilities(cl []csi.ControllerServiceCapability_RPC_Type) {

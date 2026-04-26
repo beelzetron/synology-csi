@@ -140,11 +140,12 @@ func NewNodeServiceCapability(cap csi.NodeServiceCapability_RPC_Type) *csi.NodeS
 	}
 }
 
-func RunControllerandNodePublishServer(endpoint string, d *Driver, cs csi.ControllerServer, ns csi.NodeServer) {
+func RunControllerandNodePublishServer(endpoint string, d *Driver, cs csi.ControllerServer, ns csi.NodeServer) NonBlockingGRPCServer {
 	ids := NewIdentityServer(d)
 
 	s := NewNonBlockingGRPCServer()
 	s.Start(endpoint, ids, cs, ns)
+	return s
 }
 
 func logGRPC(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {

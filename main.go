@@ -64,6 +64,14 @@ func driverStart() error {
 	log.Infof("CSI Options = {%s, %s, %s}", csiNodeID, csiEndpoint, csiClientInfoPath)
 
 	dsmService := service.NewDsmService()
+	var grpcSrv driver.NonBlockingGRPCServer
+	defer func() {
+		if grpcSrv != nil {
+			grpcSrv.Stop()
+			grpcSrv.Wait()
+		}
+		dsmService.RemoveAllDsms()
+	}()
 
 	// 1. Login DSMs by given ClientInfo
 	info, err := common.LoadConfig(csiClientInfoPath)
@@ -81,7 +89,6 @@ func driverStart() error {
 	if dsmService.GetDsmsCount() == 0 {
 		return fmt.Errorf("no DSM clients configured in %s", csiClientInfoPath)
 	}
-	defer dsmService.RemoveAllDsms()
 
 	// 2. Create command executor
 	cmdMap := map[string]string{
@@ -102,7 +109,7 @@ func driverStart() error {
 		log.Errorf("Failed to create driver: %v", err)
 		return err
 	}
-	drv.Activate()
+	grpcSrv = drv.Activate()
 
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, os.Interrupt, syscall.SIGTERM)

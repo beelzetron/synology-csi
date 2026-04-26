@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"sync"
 	"time"
 
 	"github.com/SynologyOpenSource/synology-csi/pkg/logger"
@@ -43,6 +44,9 @@ func newDSMHTTPClient(https bool) *http.Client {
 }
 
 type DSM struct {
+	// reqMu serializes Login/Logout and HTTP requests so Sid and re-login are not racy across gRPC handlers.
+	reqMu sync.Mutex
+
 	Ip         string
 	Port       int
 	Username   string
@@ -69,10 +73,13 @@ type Response struct {
 }
 
 func (dsm *DSM) sendRequest(data string, apiTemplate interface{}, params url.Values, cgiPath string) (Response, error) {
+	dsm.reqMu.Lock()
+	defer dsm.reqMu.Unlock()
+
 	resp, err := dsm.sendRequestWithoutConnectionCheck(data, apiTemplate, params, cgiPath)
 	if err != nil && (resp.ErrorCode == 105 || resp.ErrorCode == 106 || resp.ErrorCode == 119) { // 105: WEBAPI_ERR_NO_PERMISSION, 106: session timeout, 119: WEBAPI_ERR_SID_NOT_FOUND
-		// Re-login
-		if err := dsm.Login(); err != nil {
+		// Re-login (must not call Login(), which would deadlock on reqMu)
+		if err := dsm.loginUnlocked(); err != nil {
 			return Response{}, fmt.Errorf("Failed to re-login to DSM: [%s]. err: %v", dsm.Ip, err)
 		}
 		log.Info("Re-login succeeded.")
@@ -181,8 +188,8 @@ func (dsm *DSM) sendRequestWithoutConnectionCheck(data string, apiTemplate inter
 	return outResp, nil
 }
 
-// Login by given user name and password
-func (dsm *DSM) Login() error {
+// loginUnlocked performs login; caller must hold dsm.reqMu.
+func (dsm *DSM) loginUnlocked() error {
 	params := url.Values{}
 	params.Add("api", "SYNO.API.Auth")
 	params.Add("method", "login")
@@ -209,8 +216,18 @@ func (dsm *DSM) Login() error {
 	return nil
 }
 
+// Login by given user name and password
+func (dsm *DSM) Login() error {
+	dsm.reqMu.Lock()
+	defer dsm.reqMu.Unlock()
+	return dsm.loginUnlocked()
+}
+
 // Logout on current IP and reset the synoToken
 func (dsm *DSM) Logout() error {
+	dsm.reqMu.Lock()
+	defer dsm.reqMu.Unlock()
+
 	params := url.Values{}
 	params.Add("api", "SYNO.API.Auth")
 	params.Add("method", "logout")
