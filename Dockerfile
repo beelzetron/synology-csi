@@ -1,7 +1,7 @@
 # Copyright 2021 Synology Inc.
 
 ############## Build stage ##############
-FROM golang:1.22-alpine AS builder
+FROM golang:1.26.2-alpine AS builder
 LABEL stage=synobuilder
 
 RUN apk add --no-cache alpine-sdk
