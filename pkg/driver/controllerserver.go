@@ -74,7 +74,7 @@ func (cs *controllerServer) isVolumeAccessModeSupport(mode csi.VolumeCapability_
 	return false
 }
 
-func parseNfsVesrion(ops []string) string {
+func parseNfsVersion(ops []string) string {
 	for _, op := range ops {
 		if strings.HasPrefix(op, "nfsvers") {
 			kvpair := strings.Split(op, "=")
@@ -213,7 +213,7 @@ func (cs *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 		lunDescription = pvcNamespace + "/" + pvcName
 	}
 
-	nfsVer := parseNfsVesrion(mountOptions)
+	nfsVer := parseNfsVersion(mountOptions)
 	if nfsVer != "" && !isNfsVersionAllowed(nfsVer) {
 		return nil, status.Errorf(codes.InvalidArgument, "Unsupported nfsvers: %s", nfsVer)
 	}
