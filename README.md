@@ -1,17 +1,20 @@
 # Synology CSI Driver for Kubernetes
 
-The official [Container Storage Interface](https://github.com/container-storage-interface) driver for Synology NAS.
+This repository is a **fork** of [SynologyOpenSource/synology-csi](https://github.com/SynologyOpenSource/synology-csi), the open-source [Container Storage Interface](https://github.com/container-storage-interface) driver Synology publishes for Kubernetes and DSM. Treat that upstream project as the vendor-maintained source of truth and default documentation target.
+
+**This fork** is maintained separately: it carries its own changes (fixes, dependency and toolchain updates, CI), [GitHub releases](https://github.com/beelzetron/synology-csi/releases), and [container images on GitHub Container Registry](https://github.com/beelzetron/synology-csi/pkgs/container/synology-csi). It is not a Synology product release.
 
 ### Container Images & Kubernetes Compatibility
 Driver Name: csi.san.synology.com
-| Driver Version                                                                   | Image                                                                 | Supported K8s Version |
-| -------------------------------------------------------------------------------- | --------------------------------------------------------------------- | --------------------- |
-| [v1.3.1](https://github.com/beelzetron/synology-csi/tree/v1.3.1)                 | [synology-csi:v1.3.1](https://hub.docker.com/r/synology/synology-csi) | 1.20+                 |
-| [v1.3.0](https://github.com/SynologyOpenSource/synology-csi/tree/release-v1.3.0) | [synology-csi:v1.3.0](https://hub.docker.com/r/synology/synology-csi) | 1.20+                 |
+| Driver Version                                                                   | Image                                                                                                                                           | Supported K8s Version |
+| -------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- | --------------------- |
+| [v1.3.2](https://github.com/beelzetron/synology-csi/tree/v1.3.2)                 | [`ghcr.io/beelzetron/synology-csi:v1.3.2`](https://github.com/beelzetron/synology-csi/pkgs/container/synology-csi)                               | 1.20+                 |
+| [v1.3.1](https://github.com/beelzetron/synology-csi/tree/v1.3.1)                 | [`ghcr.io/beelzetron/synology-csi:v1.3.1`](https://github.com/beelzetron/synology-csi/pkgs/container/synology-csi)                               | 1.20+                 |
+| [v1.3.0](https://github.com/SynologyOpenSource/synology-csi/tree/release-v1.3.0) | [`ghcr.io/beelzetron/synology-csi:v1.3.0`](https://github.com/beelzetron/synology-csi/pkgs/container/synology-csi)                               | 1.20+                 |
 
+Images are published to [GitHub Container Registry](https://github.com/beelzetron/synology-csi/pkgs/container/synology-csi) (`ghcr.io/beelzetron/synology-csi`). If the package is private, run `docker login ghcr.io` using a token with the `read:packages` scope (and configure an `imagePullSecret` on the driver pods if needed).
 
-
-The Synology CSI driver supports:
+This driver supports:
 - Access Modes: Read/Write Multiple Pods
 - Cloning
 - Expansion
@@ -32,7 +35,7 @@ The Synology CSI driver supports:
 3. After you complete the steps below, the *full* deployment of the CSI driver, including the snapshotter, will be installed. If you don’t need the **Snapshot** feature, you can install the *basic* deployment of the CSI driver instead.
 
 ### Procedure
-1. Clone the git repository. `git clone https://github.com/SynologyOpenSource/synology-csi.git`
+1. Clone this fork. `git clone https://github.com/beelzetron/synology-csi.git`
 2. Enter the directory. `cd synology-csi`
 3. Copy the client-info-template.yml file. `cp config/client-info-template.yml config/client-info.yml`
 4. Edit `config/client-info.yml` to configure the connection information for DSM. You can specify **one or more** storage systems on which the CSI volumes will be created. Change the following parameters as needed:
@@ -49,7 +52,7 @@ The Synology CSI driver supports:
         - *basic*:
             `./scripts/deploy.sh build && ./scripts/deploy.sh install --basic`
 
-        If you don’t need to build the driver locally and want to pull the [image](https://hub.docker.com/r/synology/synology-csi) from Docker instead, run the command as instructed below.
+        If you don’t need to build the driver locally and want to use the [image from GHCR](https://github.com/beelzetron/synology-csi/pkgs/container/synology-csi) instead, run the command as instructed below.
 
         - *full*:
             `./scripts/deploy.sh install --all`
@@ -241,7 +244,7 @@ Create and apply VolumeSnapshotClasses with the properties you want.
 
 ## Building & Manually Installing
 
-By default, the CSI driver will pull the latest [image](https://hub.docker.com/r/synology/synology-csi) from Docker Hub.
+The bundled Kubernetes manifests reference [`ghcr.io/beelzetron/synology-csi`](https://github.com/beelzetron/synology-csi/pkgs/container/synology-csi) (tag pinned per release).
 
 If you want to use images you built locally for installation, edit all files under `deploy/kubernetes/<k8s version>/`  and make sure `imagePullPolicy: IfNotPresent` is included in every csi-plugin container.
 
