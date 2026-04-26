@@ -1,13 +1,20 @@
 name: CI
+# pull_request: runs for PRs (including every push to the PR branch).
+# push: only default branch and version tags — otherwise every commit on a PR
+# branch would match both `push` and `pull_request` and CI would run twice.
 on:
-  push:
+  pull_request:
     paths:
       - '.github/workflows/ci.yaml'
       - 'go.*'
       - '**/*.go'
       - 'Dockerfile'
       - 'Makefile'
-  pull_request:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*'
     paths:
       - '.github/workflows/ci.yaml'
       - 'go.*'
