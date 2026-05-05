@@ -70,7 +70,10 @@ func (service *DsmService) createSMBorNFSVolumeBySnapshot(dsm *webapi.DSM, spec 
 	}
 
 	if newSizeInMB != shareInfo.QuotaValueInMB {
-		// FIXME: need to delete share
+		// Cleanup the cloned share to avoid leaving orphan resources
+		if delErr := dsm.ShareDelete(spec.ShareName); delErr != nil {
+			log.Warnf("[%s] Failed to cleanup share [%s] after quota mismatch: %v", dsm.Ip, spec.ShareName, delErr)
+		}
 		return nil,
 			status.Errorf(codes.OutOfRange, "Requested share quotaMB [%d] is not equal to snapshot restore quotaMB [%d]", newSizeInMB, shareInfo.QuotaValueInMB)
 	}
