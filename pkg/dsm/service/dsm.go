@@ -743,6 +743,7 @@ func (service *DsmService) listISCSIVolumes(dsmIp string) (infos []*models.K8sVo
 			continue
 		}
 
+		seenLuns := make(map[string]bool)
 		for _, target := range targetInfos {
 			// TODO: use target.ConnectedSessions to filter targets
 			for _, mapping := range target.MappedLuns {
@@ -756,7 +757,10 @@ func (service *DsmService) listISCSIVolumes(dsmIp string) (infos []*models.K8sVo
 					continue
 				}
 
-				// FIXME: filter same LUN mapping to two target
+				if seenLuns[lun.Uuid] {
+					continue
+				}
+				seenLuns[lun.Uuid] = true
 				infos = append(infos, DsmLunToK8sVolume(dsm.Ip, lun, target))
 			}
 		}
