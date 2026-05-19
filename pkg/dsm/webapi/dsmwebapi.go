@@ -57,8 +57,11 @@ type DSM struct {
 
 	// httpClient is a cached HTTP client reused across all DSM API calls.
 	// It is initialized once on first use to reuse TCP connections (keep-alive).
-	// Set via initHTTPClient() under reqMu to avoid races with the client's transport.
 	httpClient   *http.Client
+	// clientInitMu guards lazy initialization of httpClient.
+	// LOCK HIERARCHY: reqMu MUST always be acquired before clientInitMu.
+	// This ordering is critical to avoid deadlocks — all call paths
+	// (Login, Logout, sendRequest) already hold reqMu first.
 	clientInitMu sync.Mutex
 }
 
@@ -91,14 +94,10 @@ func (dsm *DSM) initHTTPClient() {
 }
 
 // httpClientDo performs the request using the cached HTTP client, initializing
-// it lazily on first call. Must be called under dsm.reqMu or with equivalent
-// mutual exclusion (the underlying client is safe for concurrent use once set).
+// it lazily on first call via initHTTPClient. Safe for concurrent use once the
+// client is initialized — http.Client is goroutine-safe by design.
 func (dsm *DSM) httpClientDo(req *http.Request) (*http.Response, error) {
-	dsm.clientInitMu.Lock()
-	if dsm.httpClient == nil {
-		dsm.httpClient = newDSMHTTPClient(dsm.Https)
-	}
-	dsm.clientInitMu.Unlock()
+	dsm.initHTTPClient()
 	return dsm.httpClient.Do(req)
 }
 
