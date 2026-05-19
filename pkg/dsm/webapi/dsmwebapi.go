@@ -53,7 +53,16 @@ type DSM struct {
 	Password   string
 	Sid        string
 	Https      bool
-	Controller string //new
+	Controller string
+
+	// httpClient is a cached HTTP client reused across all DSM API calls.
+	// It is initialized once on first use to reuse TCP connections (keep-alive).
+	httpClient   *http.Client
+	// clientInitMu guards lazy initialization of httpClient.
+	// LOCK HIERARCHY: reqMu MUST always be acquired before clientInitMu.
+	// This ordering is critical to avoid deadlocks — all call paths
+	// (Login, Logout, sendRequest) already hold reqMu first.
+	clientInitMu sync.Mutex
 }
 
 type errData struct {
@@ -70,6 +79,26 @@ type Response struct {
 	ErrorCode  int
 	Success    bool
 	Data       interface{}
+}
+
+// initHTTPClient creates or replaces the cached HTTP client for this DSM instance.
+// Caller must hold dsm.reqMu (or otherwise guarantee mutual exclusion) if the
+// client is being set up for the first time or replaced after a transport change.
+func (dsm *DSM) initHTTPClient() {
+	dsm.clientInitMu.Lock()
+	defer dsm.clientInitMu.Unlock()
+	if dsm.httpClient != nil {
+		return
+	}
+	dsm.httpClient = newDSMHTTPClient(dsm.Https)
+}
+
+// httpClientDo performs the request using the cached HTTP client, initializing
+// it lazily on first call via initHTTPClient. Safe for concurrent use once the
+// client is initialized — http.Client is goroutine-safe by design.
+func (dsm *DSM) httpClientDo(req *http.Request) (*http.Response, error) {
+	dsm.initHTTPClient()
+	return dsm.httpClient.Do(req)
 }
 
 func (dsm *DSM) sendRequest(data string, apiTemplate interface{}, params url.Values, cgiPath string) (Response, error) {
@@ -90,7 +119,6 @@ func (dsm *DSM) sendRequest(data string, apiTemplate interface{}, params url.Val
 }
 
 func (dsm *DSM) sendRequestWithoutConnectionCheck(data string, apiTemplate interface{}, params url.Values, cgiPath string) (Response, error) {
-	client := newDSMHTTPClient(dsm.Https)
 	var req *http.Request
 	var err error
 	var cgiUrl string
@@ -128,7 +156,8 @@ func (dsm *DSM) sendRequestWithoutConnectionCheck(data string, apiTemplate inter
 		req.AddCookie(&cookie)
 	}
 
-	resp, err := client.Do(req)
+	// Use the cached HTTP client (initialized lazily) to reuse connections.
+	resp, err := dsm.httpClientDo(req)
 	if err != nil {
 		return Response{}, err
 	}
@@ -220,6 +249,9 @@ func (dsm *DSM) loginUnlocked() error {
 func (dsm *DSM) Login() error {
 	dsm.reqMu.Lock()
 	defer dsm.reqMu.Unlock()
+	// Initialize the cached HTTP client under reqMu to avoid races with
+	// concurrent sendRequest calls that also hold reqMu.
+	dsm.initHTTPClient()
 	return dsm.loginUnlocked()
 }
 
