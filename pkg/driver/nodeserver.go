@@ -49,6 +49,9 @@ type nodeServer struct {
 	Initiator  *initiatorDriver
 	Client     clientset.Interface
 	tools      tools
+
+	loginTargetFunc  func(volumeId string) ([]string, error)
+	logoutTargetFunc func(volumeID string, stagingTargetPath string)
 }
 
 func waitForDevicePathToExist(path string) error {
@@ -469,6 +472,10 @@ func (ns *nodeServer) nodeStageSMBVolume(ctx context.Context, spec *models.NodeS
 }
 
 func (ns *nodeServer) nodeStageNFSVolume(ctx context.Context, spec *models.NodeStageVolumeSpec) (*csi.NodeStageVolumeResponse, error) {
+	if spec.VolumeCapability.GetBlock() != nil {
+		return nil, status.Error(codes.InvalidArgument, "NFS protocol only allows 'mount' access type")
+	}
+
 	nodeIps, err := getNodeAddress(ctx, ns.Client)
 	if err != nil {
 		return nil, status.Error(codes.Internal, fmt.Sprintf("Failed to get node IPs for NFS privilege setting, err: %v", err))
@@ -559,6 +566,10 @@ func (ns *nodeServer) NodePublishVolume(ctx context.Context, req *csi.NodePublis
 
 	// nfs
 	if req.VolumeContext["protocol"] == utils.ProtocolNfs {
+		if isBlock {
+			return nil, status.Error(codes.InvalidArgument, "NFS protocol only allows 'mount' access type")
+		}
+
 		options = append(options, req.GetVolumeCapability().GetMount().GetMountFlags()...)
 
 		var server, baseDir string             //NFSTODO: subDir
@@ -633,10 +644,25 @@ func (ns *nodeServer) NodePublishVolume(ctx context.Context, req *csi.NodePublis
 			return nil, status.Error(codes.Internal, err.Error())
 		}
 	default:
-		iscsiDevPaths, err := ns.loginTarget(volumeId)
+		loginTarget := ns.loginTarget
+		if ns.loginTargetFunc != nil {
+			loginTarget = ns.loginTargetFunc
+		}
+		logoutTarget := ns.logoutTarget
+		if ns.logoutTargetFunc != nil {
+			logoutTarget = ns.logoutTargetFunc
+		}
+
+		iscsiDevPaths, err := loginTarget(volumeId)
 		if err != nil {
 			return nil, status.Error(codes.Internal, err.Error())
 		}
+		publishedOK := false
+		defer func() {
+			if !publishedOK {
+				logoutTarget(volumeId, stagingTargetPath)
+			}
+		}()
 
 		volumeMountPath := getVolumeMountPath(iscsiDevPaths)
 		if volumeMountPath == "" {
@@ -651,6 +677,7 @@ func (ns *nodeServer) NodePublishVolume(ctx context.Context, req *csi.NodePublis
 		if err != nil {
 			return nil, status.Error(codes.Internal, err.Error())
 		}
+		publishedOK = true
 	}
 
 	return &csi.NodePublishVolumeResponse{}, nil

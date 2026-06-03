@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"strings"
 	"sync"
 	"time"
 
@@ -26,6 +27,14 @@ var loginErrorQueryScrubber = regexp.MustCompile(`passwd=.*&`)
 // defaultDSMRequestTimeout bounds each DSM HTTP round-trip so stuck storage or
 // network partitions cannot block CSI RPCs indefinitely.
 const defaultDSMRequestTimeout = 2 * time.Minute
+
+var sensitiveQueryKeys = map[string]struct{}{
+	"account":  {},
+	"passwd":   {},
+	"password": {},
+	"sid":      {},
+	"username": {},
+}
 
 func newDSMHTTPClient(https bool) *http.Client {
 	if https {
@@ -57,7 +66,7 @@ type DSM struct {
 
 	// httpClient is a cached HTTP client reused across all DSM API calls.
 	// It is initialized once on first use to reuse TCP connections (keep-alive).
-	httpClient   *http.Client
+	httpClient *http.Client
 	// clientInitMu guards lazy initialization of httpClient.
 	// LOCK HIERARCHY: reqMu MUST always be acquired before clientInitMu.
 	// This ordering is critical to avoid deadlocks — all call paths
@@ -101,6 +110,18 @@ func (dsm *DSM) httpClientDo(req *http.Request) (*http.Response, error) {
 	return dsm.httpClient.Do(req)
 }
 
+func sanitizeQueryForLog(params url.Values) string {
+	sanitized := make(url.Values, len(params))
+	for key, values := range params {
+		if _, ok := sensitiveQueryKeys[strings.ToLower(key)]; ok {
+			sanitized[key] = []string{"<redacted>"}
+			continue
+		}
+		sanitized[key] = append([]string(nil), values...)
+	}
+	return sanitized.Encode()
+}
+
 func (dsm *DSM) sendRequest(data string, apiTemplate interface{}, params url.Values, cgiPath string) (Response, error) {
 	dsm.reqMu.Lock()
 	defer dsm.reqMu.Unlock()
@@ -139,7 +160,7 @@ func (dsm *DSM) sendRequestWithoutConnectionCheck(data string, apiTemplate inter
 	baseUrl.RawQuery = params.Encode()
 
 	if logger.WebapiDebug {
-		log.Debugln(baseUrl.RawQuery)
+		log.Debugln(sanitizeQueryForLog(params))
 	}
 
 	if data != "" {

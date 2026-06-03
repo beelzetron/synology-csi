@@ -6,10 +6,35 @@ package webapi
 
 import (
 	"net/http"
+	"net/url"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 )
+
+func TestSanitizeQueryForLogRedactsSensitiveValues(t *testing.T) {
+	params := url.Values{}
+	params.Set("api", "SYNO.API.Auth")
+	params.Set("account", "admin")
+	params.Set("passwd", "secret")
+	params.Set("password", "another-secret")
+	params.Set("sid", "session-id")
+	params.Set("username", "volume-user")
+
+	got := sanitizeQueryForLog(params)
+	for _, raw := range []string{"admin", "secret", "another-secret", "session-id", "volume-user"} {
+		if strings.Contains(got, raw) {
+			t.Fatalf("sanitized query contains raw sensitive value %q: %s", raw, got)
+		}
+	}
+	if !strings.Contains(got, "api=SYNO.API.Auth") {
+		t.Fatalf("sanitized query dropped non-sensitive value: %s", got)
+	}
+	if strings.Count(got, "%3Credacted%3E") != 5 {
+		t.Fatalf("sanitized query redaction count = %d, want 5: %s", strings.Count(got, "%3Credacted%3E"), got)
+	}
+}
 
 // TestHTTPClientReuse verifies that the cached HTTP client is reused across
 // multiple calls to initHTTPClient instead of creating a new client each time.
