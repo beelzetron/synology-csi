@@ -25,10 +25,10 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Determine if we can push to GHCR
         id: publish
@@ -44,7 +44,7 @@ jobs:
 
       - name: Log in to GHCR
         if: steps.publish.outputs.can_push == 'true'
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -53,7 +53,7 @@ jobs:
       - name: Docker meta (GHCR tags)
         id: meta
         if: steps.publish.outputs.can_push == 'true'
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           images: ghcr.io/${{ github.repository }}
           tags: |
@@ -61,7 +61,7 @@ jobs:
             type=sha,prefix=pr-${{ github.event.pull_request.number }}-
 
       - name: Build (and push to GHCR if same-repo PR)
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: Dockerfile
