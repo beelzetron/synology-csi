@@ -28,6 +28,7 @@ import (
 	"github.com/cenkalti/backoff/v4"
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	log "github.com/sirupsen/logrus"
+	"golang.org/x/sync/singleflight"
 	"golang.org/x/sys/unix"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -52,6 +53,7 @@ type nodeServer struct {
 
 	loginTargetFunc  func(volumeId string) ([]string, error)
 	logoutTargetFunc func(volumeID string, stagingTargetPath string)
+	nodeStageFlight  singleflight.Group
 }
 
 func waitForDevicePathToExist(path string) error {
@@ -370,6 +372,23 @@ func (ns *nodeServer) setSMBVolumePermission(sourcePath string, userName string,
 }
 
 func (ns *nodeServer) nodeStageISCSIVolume(ctx context.Context, spec *models.NodeStageVolumeSpec) (*csi.NodeStageVolumeResponse, error) {
+	key := spec.VolumeId + "\x00" + spec.StagingTargetPath
+	return ns.doNodeStageOnce(key, func() (*csi.NodeStageVolumeResponse, error) {
+		return ns.nodeStageISCSIVolumeLocked(ctx, spec)
+	})
+}
+
+func (ns *nodeServer) doNodeStageOnce(key string, fn func() (*csi.NodeStageVolumeResponse, error)) (*csi.NodeStageVolumeResponse, error) {
+	resp, err, _ := ns.nodeStageFlight.Do(key, func() (interface{}, error) {
+		return fn()
+	})
+	if err != nil {
+		return nil, err
+	}
+	return resp.(*csi.NodeStageVolumeResponse), nil
+}
+
+func (ns *nodeServer) nodeStageISCSIVolumeLocked(ctx context.Context, spec *models.NodeStageVolumeSpec) (*csi.NodeStageVolumeResponse, error) {
 	// if block mode, skip mount
 	if spec.VolumeCapability.GetBlock() != nil {
 		return &csi.NodeStageVolumeResponse{}, nil

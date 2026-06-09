@@ -8,7 +8,10 @@ package driver
 
 import (
 	"context"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	"google.golang.org/grpc/codes"
@@ -46,6 +49,55 @@ func TestNodeStageVolumeRejectsNFSBlock(t *testing.T) {
 	})
 	if status.Code(err) != codes.InvalidArgument {
 		t.Fatalf("NodeStageVolume error code = %v, want %v: %v", status.Code(err), codes.InvalidArgument, err)
+	}
+}
+
+func TestDoNodeStageOnceCoalescesConcurrentCalls(t *testing.T) {
+	ns := &nodeServer{}
+	const callers = 5
+
+	var ready sync.WaitGroup
+	ready.Add(callers)
+	var done sync.WaitGroup
+	done.Add(callers)
+
+	start := make(chan struct{})
+	called := make(chan struct{})
+	release := make(chan struct{})
+	var calls int32
+	errs := make(chan error, callers)
+
+	for range callers {
+		go func() {
+			defer done.Done()
+			ready.Done()
+			<-start
+			_, err := ns.doNodeStageOnce("vol\x00stage", func() (*csi.NodeStageVolumeResponse, error) {
+				if atomic.AddInt32(&calls, 1) == 1 {
+					close(called)
+				}
+				<-release
+				return &csi.NodeStageVolumeResponse{}, nil
+			})
+			errs <- err
+		}()
+	}
+
+	ready.Wait()
+	close(start)
+	<-called
+	time.Sleep(50 * time.Millisecond)
+	close(release)
+	done.Wait()
+	close(errs)
+
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("doNodeStageOnce returned error: %v", err)
+		}
+	}
+	if got := atomic.LoadInt32(&calls); got != 1 {
+		t.Fatalf("node stage calls = %d, want 1", got)
 	}
 }
 
