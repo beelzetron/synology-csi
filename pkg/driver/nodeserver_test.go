@@ -101,6 +101,122 @@ func TestDoNodeStageOnceCoalescesConcurrentCalls(t *testing.T) {
 	}
 }
 
+func TestPathLockSetSerializesSharedPaths(t *testing.T) {
+	locks := newPathLockSet()
+	unlock := locks.lock("/stage-a")
+
+	locked := make(chan struct{})
+	release := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		unlockShared := locks.lock("/stage-a")
+		close(locked)
+		<-release
+		unlockShared()
+		close(done)
+	}()
+
+	select {
+	case <-locked:
+		t.Fatal("shared path lock was acquired before first lock was released")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	unlock()
+	select {
+	case <-locked:
+	case <-time.After(5 * time.Second):
+		t.Fatal("shared path lock did not unblock")
+	}
+	close(release)
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("shared path lock holder did not finish")
+	}
+}
+
+func TestPathLockSetAllowsDifferentPaths(t *testing.T) {
+	locks := newPathLockSet()
+	unlock := locks.lock("/stage-a")
+	defer unlock()
+
+	done := make(chan struct{})
+	go func() {
+		unlockOther := locks.lock("/stage-b")
+		unlockOther()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("different path lock was blocked")
+	}
+}
+
+func TestNodePublishVolumeWaitsForTargetPathLock(t *testing.T) {
+	targetPath := t.TempDir() + "/target"
+	stagingTargetPath := t.TempDir() + "/stage"
+	ns := &nodeServer{}
+
+	unlock := ns.lockNodePaths(targetPath)
+	done := make(chan error, 1)
+	go func() {
+		_, err := ns.NodePublishVolume(context.Background(), &csi.NodePublishVolumeRequest{
+			VolumeId:          "vol-nfs",
+			StagingTargetPath: stagingTargetPath,
+			TargetPath:        targetPath,
+			VolumeCapability:  mountVolumeCapability(),
+			VolumeContext: map[string]string{
+				"protocol": utils.ProtocolNfs,
+			},
+		})
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		t.Fatalf("NodePublishVolume returned before target path lock was released: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	unlock()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("NodePublishVolume did not finish after target path lock was released")
+	}
+}
+
+func TestNodeUnpublishVolumeWaitsForTargetPathLock(t *testing.T) {
+	targetPath := t.TempDir() + "/missing"
+	ns := &nodeServer{}
+
+	unlock := ns.lockNodePaths(targetPath)
+	done := make(chan error, 1)
+	go func() {
+		_, err := ns.NodeUnpublishVolume(context.Background(), &csi.NodeUnpublishVolumeRequest{
+			VolumeId:   "vol",
+			TargetPath: targetPath,
+		})
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		t.Fatalf("NodeUnpublishVolume returned before target path lock was released: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	unlock()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("NodeUnpublishVolume did not finish after target path lock was released")
+	}
+}
+
 func TestNodePublishVolumeRejectsNFSBlock(t *testing.T) {
 	ns := &nodeServer{}
 	_, err := ns.NodePublishVolume(context.Background(), &csi.NodePublishVolumeRequest{

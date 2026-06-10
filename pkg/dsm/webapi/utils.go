@@ -14,10 +14,10 @@ import (
 
 func (dsm *DSM) IsUC() bool {
 	dsmSysInfo, err := dsm.DsmSystemInfoGet()
-    if err != nil {
-        log.Errorf("Failed to get DSM[%s] system info", dsm.Ip)
-        return false
-    }
+	if err != nil {
+		log.Errorf("Failed to get DSM[%s] system info", dsm.Ip)
+		return false
+	}
 	return strings.Contains(dsmSysInfo.FirmwareVer, "DSM UC")
 }
 
@@ -44,12 +44,10 @@ func (dsm *DSM) GetAnotherController() (*DSM, error) {
 		return nil, err
 	}
 
-	dsm.Controller = "A"
 	anotherDsm.Controller = "B"
 	anotherList := netListB
 	for _, netIf := range netListB {
 		if netIf.Ip == ips[0] {
-			dsm.Controller = "B"
 			anotherDsm.Controller = "A"
 			anotherList = netListA
 			break
@@ -71,7 +69,7 @@ func (dsm *DSM) GetAnotherController() (*DSM, error) {
 				continue
 			}
 
-			if netIf.Status == "connected" && CheckIpReachable(netIf.Ip, anotherDsm.Port){
+			if netIf.Status == "connected" && CheckIpReachable(netIf.Ip, anotherDsm.Port) {
 				anotherDsm.Ip = netIf.Ip
 				return anotherDsm, nil
 			}

@@ -5,8 +5,12 @@
 package webapi
 
 import (
+	"encoding/json"
+	"net"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -215,4 +219,79 @@ func TestMultipleDSMInstances(t *testing.T) {
 	if dsm1.httpClient == dsm2.httpClient {
 		t.Fatal("Expected different DSM instances to have different HTTP clients")
 	}
+}
+
+func TestGetAnotherControllerDoesNotMutateSharedDSM(t *testing.T) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.URL.Query().Get("api"); got != "SYNO.Core.Network.Interface" {
+			t.Fatalf("unexpected api query: %s", got)
+		}
+		ifaces := []NetworkInterface{
+			{
+				Ifname: "eth0",
+				Ip:     "127.0.0.1",
+				Status: "connected",
+			},
+		}
+		if err := json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": true,
+			"data":    ifaces,
+		}); err != nil {
+			t.Fatalf("encode response: %v", err)
+		}
+	})
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	u, err := url.Parse(server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	host, rawPort, err := net.SplitHostPort(u.Host)
+	if err != nil {
+		t.Fatal(err)
+	}
+	port, err := strconv.Atoi(rawPort)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	dsm := &DSM{
+		Ip:         host,
+		Port:       port,
+		Controller: "primary",
+	}
+
+	var wg sync.WaitGroup
+	errs := make(chan error, 20)
+	for i := 0; i < 20; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			another, err := dsm.GetAnotherController()
+			if err != nil {
+				errs <- err
+				return
+			}
+			if another.Controller != "A" {
+				errs <- &unexpectedControllerError{got: another.Controller}
+			}
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Fatal(err)
+	}
+	if dsm.Controller != "primary" {
+		t.Fatalf("GetAnotherController mutated shared DSM Controller = %q", dsm.Controller)
+	}
+}
+
+type unexpectedControllerError struct {
+	got string
+}
+
+func (err *unexpectedControllerError) Error() string {
+	return "unexpected another controller: " + err.got
 }
