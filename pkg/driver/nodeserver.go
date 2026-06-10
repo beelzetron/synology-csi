@@ -21,8 +21,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/cenkalti/backoff/v4"
@@ -54,6 +56,89 @@ type nodeServer struct {
 	loginTargetFunc  func(volumeId string) ([]string, error)
 	logoutTargetFunc func(volumeID string, stagingTargetPath string)
 	nodeStageFlight  singleflight.Group
+	pathLocksMu      sync.Mutex
+	pathLocks        *pathLockSet
+}
+
+type pathLockSet struct {
+	mu    sync.Mutex
+	locks map[string]*pathLock
+}
+
+type pathLock struct {
+	mu   sync.Mutex
+	refs int
+}
+
+func newPathLockSet() *pathLockSet {
+	return &pathLockSet{locks: make(map[string]*pathLock)}
+}
+
+func cleanLockPaths(paths ...string) []string {
+	seen := make(map[string]struct{}, len(paths))
+	keys := make([]string, 0, len(paths))
+	for _, path := range paths {
+		if path == "" {
+			continue
+		}
+		if _, ok := seen[path]; ok {
+			continue
+		}
+		seen[path] = struct{}{}
+		keys = append(keys, path)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+func (locks *pathLockSet) lock(paths ...string) func() {
+	keys := cleanLockPaths(paths...)
+	if len(keys) == 0 {
+		return func() {}
+	}
+
+	locks.mu.Lock()
+	held := make([]*pathLock, 0, len(keys))
+	for _, key := range keys {
+		lock := locks.locks[key]
+		if lock == nil {
+			lock = &pathLock{}
+			locks.locks[key] = lock
+		}
+		lock.refs++
+		held = append(held, lock)
+	}
+	locks.mu.Unlock()
+
+	for _, lock := range held {
+		lock.mu.Lock()
+	}
+
+	return func() {
+		for i := len(held) - 1; i >= 0; i-- {
+			held[i].mu.Unlock()
+		}
+
+		locks.mu.Lock()
+		for _, key := range keys {
+			lock := locks.locks[key]
+			lock.refs--
+			if lock.refs == 0 {
+				delete(locks.locks, key)
+			}
+		}
+		locks.mu.Unlock()
+	}
+}
+
+func (ns *nodeServer) lockNodePaths(paths ...string) func() {
+	ns.pathLocksMu.Lock()
+	if ns.pathLocks == nil {
+		ns.pathLocks = newPathLockSet()
+	}
+	locks := ns.pathLocks
+	ns.pathLocksMu.Unlock()
+	return locks.lock(paths...)
 }
 
 func waitForDevicePathToExist(path string) error {
@@ -519,6 +604,9 @@ func (ns *nodeServer) NodeStageVolume(ctx context.Context, req *csi.NodeStageVol
 		return nil, status.Error(codes.InvalidArgument, "Cannot mix block and mount capabilities")
 	}
 
+	unlock := ns.lockNodePaths(stagingTargetPath)
+	defer unlock()
+
 	spec := &models.NodeStageVolumeSpec{
 		VolumeId:          volumeId,
 		StagingTargetPath: stagingTargetPath,
@@ -548,6 +636,8 @@ func (ns *nodeServer) NodeUnstageVolume(ctx context.Context, req *csi.NodeUnstag
 		return nil, status.Error(codes.InvalidArgument, "Target path missing in request")
 	}
 
+	unlock := ns.lockNodePaths(stagingTargetPath)
+	defer unlock()
 	defer ns.logoutTarget(volumeID, stagingTargetPath)
 
 	notMount, err := mount.IsNotMountPoint(ns.Mounter.Interface, stagingTargetPath)
@@ -575,6 +665,9 @@ func (ns *nodeServer) NodePublishVolume(ctx context.Context, req *csi.NodePublis
 	if req.GetVolumeCapability() == nil {
 		return nil, status.Error(codes.InvalidArgument, "Volume capability missing in request")
 	}
+
+	unlock := ns.lockNodePaths(targetPath, stagingTargetPath)
+	defer unlock()
 
 	isBlock := req.GetVolumeCapability().GetBlock() != nil // raw block, only for iscsi protocol
 	fsType := req.GetVolumeCapability().GetMount().GetFsType()
@@ -711,6 +804,9 @@ func (ns *nodeServer) NodeUnpublishVolume(ctx context.Context, req *csi.NodeUnpu
 	if targetPath == "" {
 		return nil, status.Error(codes.InvalidArgument, "Target path missing in request")
 	}
+
+	unlock := ns.lockNodePaths(targetPath)
+	defer unlock()
 
 	if _, err := os.Stat(targetPath); err != nil {
 		if os.IsNotExist(err) {

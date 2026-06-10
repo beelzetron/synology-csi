@@ -19,6 +19,7 @@ limitations under the License.
 package driver
 
 import (
+	"errors"
 	"net"
 	"os"
 	"sync"
@@ -47,43 +48,14 @@ func NewNonBlockingGRPCServer() NonBlockingGRPCServer {
 
 // NonBlocking server
 type nonBlockingGRPCServer struct {
-	mu     sync.RWMutex
-	wg     sync.WaitGroup
-	server *grpc.Server
+	mu           sync.RWMutex
+	wg           sync.WaitGroup
+	server       *grpc.Server
+	stopped      bool
+	forceStopped bool
 }
 
 func (s *nonBlockingGRPCServer) Start(endpoint string, ids csi.IdentityServer, cs csi.ControllerServer, ns csi.NodeServer) {
-	s.wg.Add(1)
-	go func() {
-		defer s.wg.Done()
-		s.serve(endpoint, ids, cs, ns)
-	}()
-}
-
-func (s *nonBlockingGRPCServer) Wait() {
-	s.wg.Wait()
-}
-
-func (s *nonBlockingGRPCServer) Stop() {
-	s.mu.RLock()
-	srv := s.server
-	s.mu.RUnlock()
-	if srv != nil {
-		srv.GracefulStop()
-	}
-}
-
-func (s *nonBlockingGRPCServer) ForceStop() {
-	s.mu.RLock()
-	srv := s.server
-	s.mu.RUnlock()
-	if srv != nil {
-		srv.Stop()
-	}
-}
-
-func (s *nonBlockingGRPCServer) serve(endpoint string, ids csi.IdentityServer, cs csi.ControllerServer, ns csi.NodeServer) {
-
 	proto, addr, err := ParseEndpoint(endpoint)
 	if err != nil {
 		log.Fatal(err.Error())
@@ -105,9 +77,6 @@ func (s *nonBlockingGRPCServer) serve(endpoint string, ids csi.IdentityServer, c
 		grpc.UnaryInterceptor(logGRPC),
 	}
 	server := grpc.NewServer(opts...)
-	s.mu.Lock()
-	s.server = server
-	s.mu.Unlock()
 
 	if ids != nil {
 		csi.RegisterIdentityServer(server, ids)
@@ -119,8 +88,56 @@ func (s *nonBlockingGRPCServer) serve(endpoint string, ids csi.IdentityServer, c
 		csi.RegisterNodeServer(server, ns)
 	}
 
+	s.mu.Lock()
+	s.server = server
+	s.stopped = false
+	s.forceStopped = false
+	s.mu.Unlock()
+
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		s.serve(server, listener)
+	}()
+}
+
+func (s *nonBlockingGRPCServer) Wait() {
+	s.wg.Wait()
+}
+
+func (s *nonBlockingGRPCServer) Stop() {
+	s.stop(false)
+}
+
+func (s *nonBlockingGRPCServer) ForceStop() {
+	s.stop(true)
+}
+
+func (s *nonBlockingGRPCServer) stop(force bool) {
+	s.mu.Lock()
+	s.stopped = true
+	s.forceStopped = force
+	srv := s.server
+	s.mu.Unlock()
+	if srv == nil {
+		return
+	}
+	if force {
+		srv.Stop()
+		return
+	}
+	srv.GracefulStop()
+}
+
+func (s *nonBlockingGRPCServer) serve(server *grpc.Server, listener net.Listener) {
 	log.Infof("Listening for connections on address: %#v", listener.Addr())
-	if err := server.Serve(listener); err != nil {
+	if err := server.Serve(listener); err != nil && !errors.Is(err, grpc.ErrServerStopped) {
 		log.Fatal(err.Error())
 	}
+
+	s.mu.Lock()
+	if s.server == server {
+		s.server = nil
+	}
+	s.mu.Unlock()
 }

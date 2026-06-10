@@ -105,8 +105,9 @@ func NewNodeServer(d *Driver) *nodeServer {
 			chapPassword: "",
 			tools:        d.tools,
 		},
-		Client: getK8sClient(),
-		tools:  d.tools,
+		Client:    getK8sClient(),
+		tools:     d.tools,
+		pathLocks: newPathLockSet(),
 	}
 }
 
