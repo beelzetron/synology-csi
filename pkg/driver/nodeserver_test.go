@@ -233,7 +233,7 @@ func TestNodePublishVolumeRejectsNFSBlock(t *testing.T) {
 	}
 }
 
-func TestNodePublishVolumeLogsOutISCSIWhenPublishFailsAfterLogin(t *testing.T) {
+func TestNodePublishVolumeLogsOutISCSIBlockWhenPublishFailsAfterLogin(t *testing.T) {
 	targetPath := t.TempDir() + "/target"
 	stagingTargetPath := t.TempDir() + "/stage"
 	var logoutCalls int
@@ -257,7 +257,7 @@ func TestNodePublishVolumeLogsOutISCSIWhenPublishFailsAfterLogin(t *testing.T) {
 		VolumeId:          "vol-iscsi",
 		StagingTargetPath: stagingTargetPath,
 		TargetPath:        targetPath,
-		VolumeCapability:  mountVolumeCapability(),
+		VolumeCapability:  blockVolumeCapability(),
 		VolumeContext: map[string]string{
 			"protocol": utils.ProtocolIscsi,
 		},
@@ -270,5 +270,43 @@ func TestNodePublishVolumeLogsOutISCSIWhenPublishFailsAfterLogin(t *testing.T) {
 	}
 	if logoutVolumeID != "vol-iscsi" || logoutStagingPath != stagingTargetPath {
 		t.Fatalf("logout args = (%q, %q), want (%q, %q)", logoutVolumeID, logoutStagingPath, "vol-iscsi", stagingTargetPath)
+	}
+}
+
+func TestNodePublishVolumeDoesNotLogoutISCSIFilesystemWhenBindFails(t *testing.T) {
+	targetPath := t.TempDir() + "/target"
+	stagingTargetPath := t.TempDir() + "/missing-stage"
+	var loginCalls, logoutCalls int
+
+	ns := &nodeServer{
+		Mounter: &mount.SafeFormatAndMount{
+			Interface: mount.New(""),
+		},
+		loginTargetFunc: func(volumeId string) ([]string, error) {
+			loginCalls++
+			return []string{"/dev/test"}, nil
+		},
+		logoutTargetFunc: func(volumeID string, stagingTargetPath string) {
+			logoutCalls++
+		},
+	}
+
+	_, err := ns.NodePublishVolume(context.Background(), &csi.NodePublishVolumeRequest{
+		VolumeId:          "vol-iscsi",
+		StagingTargetPath: stagingTargetPath,
+		TargetPath:        targetPath,
+		VolumeCapability:  mountVolumeCapability(),
+		VolumeContext: map[string]string{
+			"protocol": utils.ProtocolIscsi,
+		},
+	})
+	if status.Code(err) != codes.Internal {
+		t.Fatalf("NodePublishVolume error code = %v, want %v: %v", status.Code(err), codes.Internal, err)
+	}
+	if loginCalls != 0 {
+		t.Fatalf("login calls = %d, want 0", loginCalls)
+	}
+	if logoutCalls != 0 {
+		t.Fatalf("logout calls = %d, want 0", logoutCalls)
 	}
 }

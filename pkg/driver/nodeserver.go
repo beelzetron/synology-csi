@@ -756,6 +756,13 @@ func (ns *nodeServer) NodePublishVolume(ctx context.Context, req *csi.NodePublis
 			return nil, status.Error(codes.Internal, err.Error())
 		}
 	default:
+		if !isBlock {
+			if err := ns.Mounter.Interface.Mount(stagingTargetPath, targetPath, fsType, options); err != nil {
+				return nil, status.Error(codes.Internal, err.Error())
+			}
+			return &csi.NodePublishVolumeResponse{}, nil
+		}
+
 		loginTarget := ns.loginTarget
 		if ns.loginTargetFunc != nil {
 			loginTarget = ns.loginTargetFunc
