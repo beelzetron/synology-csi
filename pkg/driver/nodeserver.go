@@ -378,7 +378,7 @@ func getNodeAddress(ctx context.Context, client clientset.Interface) ([]string, 
 	return ips, nil
 }
 
-func (ns *nodeServer) setNFSVolumePrivilege(sourcePath string, hostnames []string, authType utils.AuthType) error {
+func (ns *nodeServer) setNFSVolumePrivilege(sourcePath string, hostnames []string, authType utils.AuthType, rootSquash string) error {
 	// NFSTODO: fix the parsing rule
 	s := strings.Split(strings.TrimPrefix(sourcePath, "//"), "/")
 	if len(s) != 2 {
@@ -391,6 +391,13 @@ func (ns *nodeServer) setNFSVolumePrivilege(sourcePath string, hostnames []strin
 		return fmt.Errorf("Failed to get DSM[%s]", dsmIp)
 	}
 
+	// rootSquash is a per-StorageClass option (StorageClass parameter
+	// "rootSquash"). An unset or invalid value falls back to the historical
+	// behaviour ("root"). Setting "none" disables NFS root squash so kubelet's
+	// fsGroup ownership chown is not squashed to an anonymous identity
+	// server-side, allowing non-root pods to read/write the share.
+	rootSquash = normalizeRootSquash(rootSquash)
+
 	priv := webapi.SharePrivilege{
 		ShareName: shareName,
 	}
@@ -402,7 +409,7 @@ func (ns *nodeServer) setNFSVolumePrivilege(sourcePath string, hostnames []strin
 			Crossmnt:   true,
 			Insecure:   true,
 			Privilege:  string(authType),
-			RootSquash: "root",
+			RootSquash: rootSquash,
 			SecurityFlavor: webapi.SecurityFlavor{
 				Kerbros:          false,
 				KerbrosIntegrity: false,
@@ -585,7 +592,7 @@ func (ns *nodeServer) nodeStageNFSVolume(ctx context.Context, spec *models.NodeS
 		return nil, status.Error(codes.Internal, fmt.Sprintf("Failed to get node IPs for NFS privilege setting, err: %v", err))
 	}
 
-	if err := ns.setNFSVolumePrivilege(spec.Source, nodeIps, utils.AuthTypeReadWrite); err != nil {
+	if err := ns.setNFSVolumePrivilege(spec.Source, nodeIps, utils.AuthTypeReadWrite, spec.RootSquash); err != nil {
 		return nil, status.Error(codes.Internal, fmt.Sprintf("Failed to set NFS privilege rule, source: %s, err: %v", spec.Source, err))
 	}
 	return &csi.NodeStageVolumeResponse{}, nil
@@ -614,6 +621,7 @@ func (ns *nodeServer) NodeStageVolume(ctx context.Context, req *csi.NodeStageVol
 		Dsm:               req.VolumeContext["dsm"],
 		Source:            req.VolumeContext["source"], // filled by CreateVolume response
 		FormatOptions:     req.VolumeContext["formatOptions"],
+		RootSquash:        req.VolumeContext["rootSquash"],
 	}
 
 	switch req.VolumeContext["protocol"] {

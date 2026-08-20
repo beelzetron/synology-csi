@@ -196,6 +196,15 @@ func (cs *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 		}
 	}
 
+	// rootSquash controls the DSM NFS share-privilege rule written at staging
+	// time. It is validated/normalized here (unknown or empty values fall back
+	// to the historical "root" behaviour) and carried to the node through
+	// VolumeContext so the node server only ever sees an allowed value.
+	rootSquash := normalizeRootSquash(params["rootSquash"])
+	if raw := params["rootSquash"]; raw != "" && rootSquash != strings.ToLower(strings.TrimSpace(raw)) {
+		log.Warnf("Volume [%s]: invalid rootSquash %q in storage class, falling back to %q", volName, raw, rootSquash)
+	}
+
 	devAttribs, err := parseDevAttribs(params)
 	if err != nil {
 		return nil, err
@@ -287,6 +296,7 @@ func (cs *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 				"formatOptions":    formatOptions,
 				"mountPermissions": mountPermissions,
 				"baseDir":          k8sVolume.BaseDir,
+				"rootSquash":       rootSquash,
 			},
 		},
 	}, nil
