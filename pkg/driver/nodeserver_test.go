@@ -8,6 +8,11 @@ package driver
 
 import (
 	"context"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -18,6 +23,7 @@ import (
 	"google.golang.org/grpc/status"
 	"k8s.io/mount-utils"
 
+	"github.com/SynologyOpenSource/synology-csi/pkg/dsm/webapi"
 	"github.com/SynologyOpenSource/synology-csi/pkg/utils"
 )
 
@@ -308,5 +314,106 @@ func TestNodePublishVolumeDoesNotLogoutISCSIFilesystemWhenBindFails(t *testing.T
 	}
 	if logoutCalls != 0 {
 		t.Fatalf("logout calls = %d, want 0", logoutCalls)
+	}
+}
+
+// mockDsmServiceWithDsm returns a DSM stub wired to a live fake HTTP server,
+// letting tests exercise setNFSVolumePermission's DSM request end to end.
+type mockDsmServiceWithDsm struct {
+	mockDsmService
+	dsm *webapi.DSM
+}
+
+func (m *mockDsmServiceWithDsm) GetDsm(ip string) (*webapi.DSM, error) { return m.dsm, nil }
+
+// TestSetNFSVolumePermissionGrantsSquashUser verifies that for NFS volumes
+// under the all_admin/all_guest root_squash modes the driver grants a user RW
+// ACE on the DSM share root (the server-side replacement for the manual NAS
+// `chmod` previously required for non-root pods), and selects the correct
+// target user per mode. It asserts the exact SYNO.Core.Share.Permission
+// request DSM receives.
+func TestSetNFSVolumePermissionGrantsSquashUser(t *testing.T) {
+	tests := []struct {
+		name       string
+		rootSquash string
+		wantUser   string
+	}{
+		{name: "all_admin grants admin RW", rootSquash: "all_admin", wantUser: "admin"},
+		{name: "all_guest grants guest RW", rootSquash: "all_guest", wantUser: "guest"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var gotQuery url.Values
+			var gotCookieHost string
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				gotQuery = r.URL.Query()
+				gotCookieHost = r.Host
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"success":true}`))
+			}))
+			defer srv.Close()
+
+			u, err := url.Parse(srv.URL)
+			if err != nil {
+				t.Fatal(err)
+			}
+			host, rawPort, err := net.SplitHostPort(u.Host)
+			if err != nil {
+				t.Fatal(err)
+			}
+			port, err := strconv.Atoi(rawPort)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			dsm := &webapi.DSM{
+				Ip:       host,
+				Port:     port,
+				Https:    false,
+				Username: "test",
+				Password: "test",
+				Sid:      "test-sid",
+			}
+			// The DSM client must resolve the share on a per-request host; the
+			// httptest host is the same instance we already captured.
+			_ = gotCookieHost
+
+			dsmSvc := &mockDsmServiceWithDsm{dsm: dsm}
+			ns := &nodeServer{dsmService: dsmSvc}
+
+			if err := ns.setNFSVolumePermission("//192.168.11.10/harnfs", tt.rootSquash); err != nil {
+				t.Fatalf("setNFSVolumePermission error: %v", err)
+			}
+
+			if gotQuery.Get("api") != "SYNO.Core.Share.Permission" {
+				t.Fatalf("api = %q, want SYNO.Core.Share.Permission", gotQuery.Get("api"))
+			}
+			if gotQuery.Get("method") != "set" {
+				t.Fatalf("method = %q, want set", gotQuery.Get("method"))
+			}
+			if gotQuery.Get("version") != "1" {
+				t.Fatalf("version = %q, want 1", gotQuery.Get("version"))
+			}
+			if gotQuery.Get("name") != `"harnfs"` {
+				t.Fatalf("name = %q, want QUOTED harnfs", gotQuery.Get("name"))
+			}
+			if gotQuery.Get("user_group_type") != `"local_user"` {
+				t.Fatalf("user_group_type = %q, want local_user", gotQuery.Get("user_group_type"))
+			}
+			wantJSON := `[{"name":"` + tt.wantUser + `","is_readonly":false,"is_writable":true,"is_deny":false}]`
+			if got := gotQuery.Get("permissions"); got != wantJSON {
+				t.Fatalf("permissions = %q, want %q", got, wantJSON)
+			}
+		})
+	}
+}
+
+// TestSetNFSVolumePermissionMalformedSource ensures a bad NFS source fails
+// before any DSM call (matching setNFSVolumePrivilege behaviour).
+func TestSetNFSVolumePermissionMalformedSource(t *testing.T) {
+	ns := &nodeServer{dsmService: &mockDsmService{}}
+	if err := ns.setNFSVolumePermission("not-a-source", "all_guest"); err == nil {
+		t.Fatal("expected error for malformed NFS source, got nil")
 	}
 }

@@ -427,6 +427,38 @@ func (ns *nodeServer) setNFSVolumePrivilege(sourcePath string, hostnames []strin
 	return nil
 }
 
+func (ns *nodeServer) setNFSVolumePermission(sourcePath string, rootSquash string) error {
+	// NFSTODO: fix the parsing rule (same as setNFSVolumePrivilege)
+	s := strings.Split(strings.TrimPrefix(sourcePath, "//"), "/")
+	if len(s) != 2 {
+		return fmt.Errorf("Failed to parse dsmIp and shareName from source path")
+	}
+	dsmIp, shareName := s[0], s[1]
+
+	dsm, err := ns.dsmService.GetDsm(dsmIp)
+	if err != nil {
+		return fmt.Errorf("Failed to get DSM[%s]", dsmIp)
+	}
+
+	permUser := "guest"
+	if rootSquash == "all_admin" {
+		permUser = "admin"
+	}
+
+	permission := webapi.SharePermission{
+		Name:       permUser,
+		IsWritable: true,
+	}
+
+	spec := webapi.SharePermissionSetSpec{
+		Name:          shareName,
+		UserGroupType: models.UserGroupTypeLocalUser,
+		Permissions:   []*webapi.SharePermission{&permission},
+	}
+
+	return dsm.SharePermissionSet(spec)
+}
+
 func (ns *nodeServer) setSMBVolumePermission(sourcePath string, userName string, authType utils.AuthType) error {
 	s := strings.Split(strings.TrimPrefix(sourcePath, "//"), "/")
 	if len(s) != 2 {
@@ -595,6 +627,24 @@ func (ns *nodeServer) nodeStageNFSVolume(ctx context.Context, spec *models.NodeS
 	if err := ns.setNFSVolumePrivilege(spec.Source, nodeIps, utils.AuthTypeReadWrite, spec.RootSquash); err != nil {
 		return nil, status.Error(codes.Internal, fmt.Sprintf("Failed to set NFS privilege rule, source: %s, err: %v", spec.Source, err))
 	}
+
+	// Synology creates CSI share roots with Windows/NFSv4 ACLs granting ONLY
+	// group:administrators. Over NFSv4.1 sec=sys the server evaluates that ACL
+	// for every request: a non-root pod uid (e.g. 1000950000) does not match a
+	// group ACE (group membership of anonymous uids is not expanded), so writes
+	// fail with EACCES even when the share POSIX mode is 0777. The durable,
+	// server-side fix (equivalent to DSM UI "map all users to admin/guest") is
+	// to ALSO grant a user RW ACE on the share for the user the client uids are
+	// squashed to (admin for all_admin, guest for all_guest). Without this, the
+	// SC must be manually worked around with an out-of-band `chmod` on the NAS.
+	// Only the all_* squash modes reach non-root pods; root ("no mapping") and
+	// admin/guest (root-only squash) are left with the historical behaviour.
+	if spec.RootSquash == "all_admin" || spec.RootSquash == "all_guest" {
+		if err := ns.setNFSVolumePermission(spec.Source, spec.RootSquash); err != nil {
+			log.Printf("Failed to set NFS share permission (continuing; rule already saved). source: %s, err: %v", spec.Source, err)
+		}
+	}
+
 	return &csi.NodeStageVolumeResponse{}, nil
 }
 

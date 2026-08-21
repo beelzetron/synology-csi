@@ -28,23 +28,26 @@ const defaultRootSquash = "root"
 // parameter that is written to the "root_squash" field of the DSM
 // SYNO.Core.FileServ.NFS.SharePrivilege.save rule.
 //
-// Accepted values:
+// The value space is EXACTLY the DSM vocabulary (verified on DSM 7.x against
+// SYNO.Core.FileServ.NFS.SharePrivilege; any other literal is rejected by the
+// API with error 2301 and the NodeStage NFS mount fails):
 //
-//   - "none": no root squash. NFS requests from uid 0 keep their identity
-//     server-side. This is required for kubelet's fsGroup chown to take effect
-//     so non-root pods can read/write a share regardless of its ownership.
-//   - "root": map remote root to the admin account (the historical driver
-//     default). With root squash active, kubelet's root chown is squashed to an
-//     anonymous identity server-side and cannot fix share ownership, which
-//     leaves non-root pods vulnerable to EACCES.
-//   - "admin": map remote root to the DSM admin account.
-//   - "all": map all NFS users to an anonymous/guest identity.
+//   - "root":      UI "No mapping" -> exports no_root_squash (uid 0 keeps its
+//     identity; non-root uids pass through untouched). Historical driver default.
+//   - "admin":     UI "Map root to admin" -> root_squash (anonuid 1024).
+//   - "guest":     UI "Map root to guest" -> root_squash (anonuid 1025).
+//   - "all_admin": UI "Map all users to admin" -> all_squash (anonuid 1024).
+//     EVERY NFS client uid (including non-root pod uids) is mapped to admin.
+//   - "all_guest": UI "Map all users to guest" -> all_squash (anonuid 1025).
+//
+// Note "none"/"no_root_squash"/"root_squash"/"all_squash" are NOT accepted by
+// the DSM API (they are the export keywords, not the API literals).
 //
 // Any other value (empty string included) falls back to defaultRootSquash.
 func normalizeRootSquash(value string) string {
 	v := strings.ToLower(strings.TrimSpace(value))
 	switch v {
-	case "none", "root", "admin", "all":
+	case "root", "admin", "guest", "all_admin", "all_guest":
 		return v
 	default:
 		return defaultRootSquash

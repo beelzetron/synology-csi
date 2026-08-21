@@ -32,13 +32,17 @@ func TestNormalizeRootSquash(t *testing.T) {
 		want  string
 	}{
 		{name: "empty falls back to default", value: "", want: "root"},
-		{name: "root is accepted unchanged", value: "root", want: "root"},
-		{name: "none disables root squash", value: "none", want: "none"},
+		{name: "root is accepted unchanged (no mapping)", value: "root", want: "root"},
 		{name: "admin maps root to admin", value: "admin", want: "admin"},
-		{name: "all maps everyone to guest", value: "all", want: "all"},
-		{name: "None is case insensitive", value: "None", want: "none"},
+		{name: "guest maps root to guest", value: "guest", want: "guest"},
+		{name: "all_admin maps all users to admin", value: "all_admin", want: "all_admin"},
+		{name: "all_guest maps all users to guest", value: "all_guest", want: "all_guest"},
 		{name: "ROOT is case insensitive", value: "ROOT", want: "root"},
-		{name: "surrounding whitespace is trimmed", value: "  none  ", want: "none"},
+		{name: "ALL_ADMIN is case insensitive", value: "ALL_ADMIN", want: "all_admin"},
+		{name: "surrounding whitespace is trimmed", value: "  all_guest  ", want: "all_guest"},
+		{name: "none (export keyword) falls back to default", value: "none", want: "root"},
+		{name: "no_root_squash (export keyword) falls back to default", value: "no_root_squash", want: "root"},
+		{name: "all_squash (export keyword) falls back to default", value: "all_squash", want: "root"},
 		{name: "unknown value falls back to default", value: "true", want: "root"},
 		{name: "garbage value falls back to default", value: "everyone", want: "root"},
 	}
@@ -58,9 +62,9 @@ func TestCreateVolume_RootSquashVolumeContext(t *testing.T) {
 		want   string
 	}{
 		{
-			name:   "rootSquash none is propagated normalized",
-			params: map[string]string{"protocol": "nfs", "location": "/volume1", "rootSquash": "none"},
-			want:   "none",
+			name:   "rootSquash all_admin is propagated normalized",
+			params: map[string]string{"protocol": "nfs", "location": "/volume1", "rootSquash": "all_admin"},
+			want:   "all_admin",
 		},
 		{
 			name:   "rootSquash absent defaults to root",
