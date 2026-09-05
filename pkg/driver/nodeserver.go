@@ -550,12 +550,71 @@ func (ns *nodeServer) nodeStageISCSIVolumeLocked(ctx context.Context, spec *mode
 
 	formatOptions := utils.StringToSlice(spec.FormatOptions)
 
-	if err = ns.Mounter.FormatAndMountSensitiveWithFormatOptions(volumeMountPath, spec.StagingTargetPath, fsType, options, nil, formatOptions); err != nil {
+	if err = ns.stageMountWithSessionRefresh(spec, volumeMountPath, fsType, options, formatOptions); err != nil {
 		return nil, status.Error(codes.Internal, err.Error())
 	}
 
 	stagedOK = true
 	return &csi.NodeStageVolumeResponse{}, nil
+}
+
+// stageMountWithSessionRefresh mounts the iSCSI volume, and if the first attempt fails with a
+// filesystem/mount error, refreshes the iSCSI session (logout + login, re-resolving the device)
+// and retries once. This guards against a resolved by-path device that has no valid filesystem
+// because a stale/dead session or a clone+delete cycle (e.g. the velero snapshot data mover)
+// left a stale by-path device behind — observed as "wrong fs type, bad option, bad superblock on
+// /dev/sdX". login() short-circuits when a session already exists, so kubelet's NodeStageVolume
+// retries (every ~2m) would otherwise reuse the same stale device and never recover. Logging the
+// blkid result distinguishes an empty device (mkfs is appropriate) from a stale/wrong device.
+func (ns *nodeServer) stageMountWithSessionRefresh(spec *models.NodeStageVolumeSpec, volumeMountPath, fsType string, options, formatOptions []string) error {
+	err := ns.Mounter.FormatAndMountSensitiveWithFormatOptions(volumeMountPath, spec.StagingTargetPath, fsType, options, nil, formatOptions)
+	if err == nil {
+		return nil
+	}
+
+	log.Warnf("NodeStageVolume: mount of %s at %s failed (%v); refreshing iSCSI session and retrying", volumeMountPath, spec.StagingTargetPath, err)
+	ns.logDeviceFilesystem(volumeMountPath)
+
+	k8sVolume := ns.dsmService.GetVolume(spec.VolumeId)
+	if k8sVolume == nil || k8sVolume.Protocol != utils.ProtocolIscsi {
+		return err
+	}
+
+	if lgErr := ns.Initiator.logout(k8sVolume.Target.Iqn, k8sVolume.DsmIp); lgErr != nil {
+		log.Warnf("NodeStageVolume: session refresh logout for %s failed: %v", k8sVolume.Target.Iqn, lgErr)
+	}
+
+	loginTarget := ns.loginTarget
+	if ns.loginTargetFunc != nil {
+		loginTarget = ns.loginTargetFunc
+	}
+	paths, lgErr := loginTarget(spec.VolumeId)
+	if lgErr != nil {
+		return fmt.Errorf("refresh login for volume %s failed: %v", spec.VolumeId, lgErr)
+	}
+	if refreshed := getVolumeMountPath(paths); refreshed != "" {
+		volumeMountPath = refreshed
+		log.Infof("NodeStageVolume: refreshed device path for %s -> %s", spec.VolumeId, volumeMountPath)
+	}
+
+	return ns.Mounter.FormatAndMountSensitiveWithFormatOptions(volumeMountPath, spec.StagingTargetPath, fsType, options, nil, formatOptions)
+}
+
+// logDeviceFilesystem logs the detected filesystem (or absence) on a block device. Useful to tell
+// an empty device (no superblock) apart from a stale/wrong device, and to confirm why a mount
+// failed with "wrong fs type / bad superblock".
+func (ns *nodeServer) logDeviceFilesystem(devPath string) {
+	if ns.tools.executor == nil {
+		return
+	}
+	out, err := ns.tools.executor.Command("blkid", "-p", "-s", "TYPE", "-s", "PTTYPE", devPath).CombinedOutput()
+	if err != nil {
+		// blkid exits non-zero when there is no usable filesystem — that is exactly the
+		// "bad superblock" case, so surface it at info level for diagnosis.
+		log.Infof("NodeStageVolume: blkid on %s -> no filesystem detected (%v): %s", devPath, err, strings.TrimSpace(string(out)))
+		return
+	}
+	log.Infof("NodeStageVolume: blkid on %s -> %s", devPath, strings.TrimSpace(string(out)))
 }
 
 func (ns *nodeServer) nodeStageSMBVolume(ctx context.Context, spec *models.NodeStageVolumeSpec, secrets map[string]string) (*csi.NodeStageVolumeResponse, error) {
