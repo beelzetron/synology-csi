@@ -2,7 +2,7 @@
 
 REGISTRY_NAME=ghcr.io/beelzetron
 IMAGE_NAME=synology-csi
-IMAGE_VERSION=v1.3.8
+IMAGE_VERSION=v1.4.1
 IMAGE_TAG=$(REGISTRY_NAME)/$(IMAGE_NAME):$(IMAGE_VERSION)
 
 # For now, only build linux/amd64 platform
