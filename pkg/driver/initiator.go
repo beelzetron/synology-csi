@@ -115,6 +115,7 @@ func (t *tools) iscsiadm_discovery(portal string) error {
 		"-m", "discoverydb",
 		"--type", "sendtargets",
 		"--portal", portal,
+		"--op", "new",
 		"--discover")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -218,7 +219,7 @@ func (d *initiatorDriver) login(targetIqn string, portal string) error {
 	}
 
 	if err := d.tools.iscsiadm_discovery(portal); err != nil {
-		log.Errorf("Failed in discovery of the target: %v", err)
+		log.Errorf("Failed to discover portal [%s]: %v", portal, err)
 		return err
 	}
 
