@@ -757,6 +757,13 @@ func (ns *nodeServer) NodeUnstageVolume(ctx context.Context, req *csi.NodeUnstag
 	defer unlock()
 	defer ns.logoutTarget(volumeID, stagingTargetPath)
 
+	if _, err := os.Stat(stagingTargetPath); err != nil {
+		if os.IsNotExist(err) {
+			return &csi.NodeUnstageVolumeResponse{}, nil
+		}
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+
 	notMount, err := mount.IsNotMountPoint(ns.Mounter.Interface, stagingTargetPath)
 	if err != nil {
 		return nil, status.Error(codes.Internal, err.Error())
@@ -766,6 +773,12 @@ func (ns *nodeServer) NodeUnstageVolume(ctx context.Context, req *csi.NodeUnstag
 		if err != nil {
 			return nil, status.Error(codes.Internal, err.Error())
 		}
+	}
+
+	// Same class as NodeUnpublishVolume: kubelet removes the staging directory after
+	// this call, and stale entries inside it would make that removal fail forever.
+	if err := ns.cleanupStaleMountDir(stagingTargetPath); err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
 	}
 
 	return &csi.NodeUnstageVolumeResponse{}, nil
@@ -945,19 +958,68 @@ func (ns *nodeServer) NodeUnpublishVolume(ctx context.Context, req *csi.NodeUnpu
 		return nil, status.Error(codes.Internal, err.Error())
 	}
 
-	if notMount {
-		return &csi.NodeUnpublishVolumeResponse{}, nil
+	if !notMount {
+		if err := ns.Mounter.Interface.Unmount(targetPath); err != nil {
+			return nil, status.Error(codes.Internal, err.Error())
+		}
 	}
 
-	if err := ns.Mounter.Interface.Unmount(targetPath); err != nil {
+	// Kubelet removes the directory after this call. A stale subPath directory
+	// (created on the host filesystem while the volume was not mounted) makes that
+	// removal fail forever, which keeps the volume in use and blocks any later
+	// attach on another node.
+	if err := ns.cleanupStaleMountDir(targetPath); err != nil {
 		return nil, status.Error(codes.Internal, err.Error())
 	}
 
-	if err := os.Remove(targetPath); err != nil {
-		return nil, status.Errorf(codes.Internal, "Failed to remove target path.")
+	if err := os.Remove(targetPath); err != nil && !os.IsNotExist(err) {
+		return nil, status.Errorf(codes.Internal, "Failed to remove target path: %v", err)
 	}
 
 	return &csi.NodeUnpublishVolumeResponse{}, nil
+}
+
+// cleanupStaleMountDir removes leftover entries inside a path that is no longer a mount
+// point, so kubelet can remove the directory after NodeUnpublishVolume or NodeUnstageVolume.
+//
+// Kubelet prepares the subPath directory directly on the host filesystem when the volume is
+// not mounted (NAS outage, failed or skipped stage). That entry survives the unmount and makes
+// kubelet's own directory removal fail with "directory not empty" forever. The teardown then
+// never completes: the volume stays in the node's volumesInUse, the attach-detach controller
+// never detaches it, the iSCSI session stays logged in, and a pod rescheduled to another node
+// deadlocks with Multi-Attach (verified on the lab cluster 2026-10-25).
+func (ns *nodeServer) cleanupStaleMountDir(mountPath string) error {
+	notMount, err := mount.IsNotMountPoint(ns.Mounter.Interface, mountPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	if !notMount {
+		return fmt.Errorf("%s is still a mount point - refusing to remove its content", mountPath)
+	}
+	entries, err := os.ReadDir(mountPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	if len(entries) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(entries))
+	for _, e := range entries {
+		names = append(names, e.Name())
+	}
+	log.Warnf("teardown: removing %d stale entrie(s) under unmounted mount point %q: %v", len(names), mountPath, names)
+	for _, e := range entries {
+		if err := os.RemoveAll(filepath.Join(mountPath, e.Name())); err != nil {
+			return fmt.Errorf("remove stale entry %q under %q: %w", e.Name(), mountPath, err)
+		}
+	}
+	return nil
 }
 
 func (ns *nodeServer) NodeGetInfo(ctx context.Context, req *csi.NodeGetInfoRequest) (*csi.NodeGetInfoResponse, error) {

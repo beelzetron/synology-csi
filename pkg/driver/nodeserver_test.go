@@ -12,6 +12,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -415,5 +417,119 @@ func TestSetNFSVolumePermissionMalformedSource(t *testing.T) {
 	ns := &nodeServer{dsmService: &mockDsmService{}}
 	if err := ns.setNFSVolumePermission("not-a-source", "all_guest"); err == nil {
 		t.Fatal("expected error for malformed NFS source, got nil")
+	}
+}
+
+// TestNodeUnpublishVolumeRemovesStaleEntriesUnderUnmountedTarget reproduces the
+// 2026-10-25 lab deadlock: kubelet's subPath preparation left "prometheus-db"
+// inside the volume mount directory while the volume was not mounted. The old
+// code returned early (the path is not a mount point) and kubelet then failed to
+// remove the non-empty directory forever, so the volume stayed in use and the
+// rescheduled pod deadlocked with Multi-Attach.
+func TestNodeUnpublishVolumeRemovesStaleEntriesUnderUnmountedTarget(t *testing.T) {
+	targetPath := filepath.Join(t.TempDir(), "mount")
+	if err := os.MkdirAll(filepath.Join(targetPath, "prometheus-db"), 0750); err != nil {
+		t.Fatalf("prepare stale target: %v", err)
+	}
+	ns := &nodeServer{Mounter: &mount.SafeFormatAndMount{Interface: mount.NewFakeMounter(nil)}}
+
+	if _, err := ns.NodeUnpublishVolume(context.Background(), &csi.NodeUnpublishVolumeRequest{
+		VolumeId:   "vol",
+		TargetPath: targetPath,
+	}); err != nil {
+		t.Fatalf("NodeUnpublishVolume returned %v, want success", err)
+	}
+	if _, err := os.Stat(targetPath); !os.IsNotExist(err) {
+		t.Fatalf("target path still present after unpublish: %v", err)
+	}
+}
+
+// TestNodeUnpublishVolumeUnmountsThenCleansTarget covers the still-mounted case:
+// the driver must unmount first, then clear the leftovers so kubelet's own
+// directory removal can succeed.
+func TestNodeUnpublishVolumeUnmountsThenCleansTarget(t *testing.T) {
+	targetPath := filepath.Join(t.TempDir(), "mount")
+	if err := os.MkdirAll(filepath.Join(targetPath, "prometheus-db"), 0750); err != nil {
+		t.Fatalf("prepare stale target: %v", err)
+	}
+	fake := mount.NewFakeMounter([]mount.MountPoint{{Device: "/dev/sdc", Path: targetPath, Type: "xfs"}})
+	ns := &nodeServer{Mounter: &mount.SafeFormatAndMount{Interface: fake}}
+
+	if _, err := ns.NodeUnpublishVolume(context.Background(), &csi.NodeUnpublishVolumeRequest{
+		VolumeId:   "vol",
+		TargetPath: targetPath,
+	}); err != nil {
+		t.Fatalf("NodeUnpublishVolume returned %v, want success", err)
+	}
+	if len(fake.GetLog()) == 0 {
+		t.Fatal("expected an unmount call, got none")
+	}
+	if _, err := os.Stat(targetPath); !os.IsNotExist(err) {
+		t.Fatalf("target path still present after unpublish: %v", err)
+	}
+}
+
+// TestNodeUnstageVolumeCleansStaleStagingEntries covers the second failure seen
+// in the lab: kubelet could not remove the non-empty globalmount directory after
+// NodeUnstageVolume, so the volume was never released.
+func TestNodeUnstageVolumeCleansStaleStagingEntries(t *testing.T) {
+	stagingPath := filepath.Join(t.TempDir(), "globalmount")
+	if err := os.MkdirAll(filepath.Join(stagingPath, "prometheus-db"), 0750); err != nil {
+		t.Fatalf("prepare stale staging: %v", err)
+	}
+	ns := &nodeServer{
+		Driver:     &Driver{csiPluginDataDir: t.TempDir()},
+		Mounter:    &mount.SafeFormatAndMount{Interface: mount.NewFakeMounter(nil)},
+		dsmService: &mockDsmService{},
+	}
+
+	if _, err := ns.NodeUnstageVolume(context.Background(), &csi.NodeUnstageVolumeRequest{
+		VolumeId:          "vol",
+		StagingTargetPath: stagingPath,
+	}); err != nil {
+		t.Fatalf("NodeUnstageVolume returned %v, want success", err)
+	}
+	entries, err := os.ReadDir(stagingPath)
+	if err != nil {
+		t.Fatalf("read staging path: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("staging path still holds %d entrie(s): %v", len(entries), entries)
+	}
+}
+
+// TestNodeUnstageVolumeMissingStagingPathIsIdempotent guards the CSI requirement
+// that teardown calls are idempotent: kubelet may call NodeUnstageVolume after
+// the staging directory is already gone.
+func TestNodeUnstageVolumeMissingStagingPathIsIdempotent(t *testing.T) {
+	ns := &nodeServer{
+		Driver:     &Driver{csiPluginDataDir: t.TempDir()},
+		Mounter:    &mount.SafeFormatAndMount{Interface: mount.NewFakeMounter(nil)},
+		dsmService: &mockDsmService{},
+	}
+	if _, err := ns.NodeUnstageVolume(context.Background(), &csi.NodeUnstageVolumeRequest{
+		VolumeId:          "vol",
+		StagingTargetPath: filepath.Join(t.TempDir(), "gone"),
+	}); err != nil {
+		t.Fatalf("NodeUnstageVolume returned %v for a missing staging path, want success", err)
+	}
+}
+
+// TestCleanupStaleMountDirRefusesMountedPath guards the safety check: content
+// must never be removed while the path is still a mount point, or a failed
+// unmount would delete real volume data.
+func TestCleanupStaleMountDirRefusesMountedPath(t *testing.T) {
+	mountPath := filepath.Join(t.TempDir(), "mount")
+	if err := os.MkdirAll(filepath.Join(mountPath, "prometheus-db"), 0750); err != nil {
+		t.Fatalf("prepare stale mount dir: %v", err)
+	}
+	fake := mount.NewFakeMounter([]mount.MountPoint{{Device: "/dev/sdc", Path: mountPath, Type: "xfs"}})
+	ns := &nodeServer{Mounter: &mount.SafeFormatAndMount{Interface: fake}}
+
+	if err := ns.cleanupStaleMountDir(mountPath); err == nil {
+		t.Fatal("cleanupStaleMountDir accepted a mounted path")
+	}
+	if _, err := os.Stat(filepath.Join(mountPath, "prometheus-db")); err != nil {
+		t.Fatalf("content removed while still mounted: %v", err)
 	}
 }
